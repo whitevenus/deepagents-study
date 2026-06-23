@@ -40,7 +40,15 @@
 ## 分阶段路线图(每阶段终止条件 = 该 loop 的可测试 /goal)
 - **Phase 0 · 边学边搭(对应 8 章)** —— ✅ 8 章都有「能跑的切片 + 能用自己的话讲清机制」
 - **Phase 1 · MVP 闭环** —— ✅ 建任务 → agent 自动完成 → 看板显示结果,端到端跑通
-- **Phase 2 · 多 agent 异步编排** —— ✅ 同发 5 个任务并发完成无串扰
+- **Phase 2 · 多 agent 异步编排 + 健壮执行** —— ✅ 同发 5 个任务并发完成无串扰
+  - 解耦发布/执行:独立 worker 循环扫描 pending 队列主动接单(Phase1 是写死在 POST 里抄近路)。
+  - 真任务队列 + 并发 worker(Ch6)。
+  - 请求超时 + 失败重试:修 Phase1 暴露的 bug——ChatOpenAI 无 timeout,模型卡住→任务永久 in_progress 不报错。
+  - 卡死任务自动恢复:检测 stale in_progress(超时未更新)→ 重置/重试,进程重启不丢。
+  - 任务可取消(Ch6 cancel_async_task)。
+  - 大任务拆子任务 task→subtask(Ch4/Ch5)。
+  - 动手:起 langgraph dev 异步编排 / async_tasks channel(Ch6 延后的实操)。
+  - 已知待修样本:DB 里 in_progress 的"调研langchian"(模型请求挂起,无超时);pending 的"调研deepagents"(无 worker 接单)。
 - **Phase 3 · 权限系统(Casbin)** —— ✅ 越权被拒,权限矩阵单测通过
 - **Phase 4 · 知识库沉淀(pgvector + 长期记忆)** —— ✅ 相似任务第二次更快/更准(固定基准)
 - **Phase 5 · 审计日志(两层设计)** —— ✅ 任一任务可完整追溯 谁/哪个agent/做了什么/何时

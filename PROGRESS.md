@@ -5,9 +5,15 @@
 
 ## 🔄 新会话恢复指南(给下次开新会话的你/Claude)
 - **现状**:Phase 0(deepagents 8 章全学完)+ Phase 1(MVP 闭环)均已完成。
-- **起服务**:
-  - 后端:`uv run uvicorn app.main:app --app-dir backend --port 8000 --reload`
-  - 前端:`cd frontend && pnpm dev` → 开 http://127.0.0.1:5173
+- **起服务**(推荐 tmux,能切窗口看日志):
+  - 一键起两个 tmux 窗口:
+    ```
+    tmux new-session -d -s autoboard -n backend
+    tmux send-keys -t autoboard:backend "cd <项目根> && uv run uvicorn app.main:app --app-dir backend --port 8000 --reload" Enter
+    tmux new-window -t autoboard -n frontend
+    tmux send-keys -t autoboard:frontend "cd <项目根>/frontend && pnpm dev --port 5173 --host 127.0.0.1" Enter
+    ```
+  - 连进去看日志:`tmux attach -t autoboard`;切窗口 `Ctrl-b 1`(后端)/`Ctrl-b 2`(前端);脱离 `Ctrl-b d`;关掉 `tmux kill-session -t autoboard`
   - 跑前先 `cp .env.example .env` 填 key(备份在 `learning/bak.txt`,已 gitignore)
 - **代码地图**:
   - `backend/app/` —— FastAPI:`tasks/`(看板任务领域)+ `agent_runtime/executor.py`(agent 执行器)
