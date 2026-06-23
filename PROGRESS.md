@@ -10,9 +10,9 @@
 - [x] Ch3 · 虚拟文件系统与上下文  ✅ 跑通(持久化+用户隔离已验证)
 - [x] Ch4 · 任务规划与分解  ✅ 跑通(todos 在 state 中,已提取成看板数据)
 - [x] Ch5 · 子 Agent 与上下文隔离  ✅ 跑通(委派+隔离+结构化返回)
-- [ ] Ch6 · 异步子 Agent 并行编排
-- [ ] Ch7 · Skills 可复用能力包
-- [ ] Ch8 · 长期记忆与路由
+- [x] Ch6 · 异步子 Agent 并行编排  ✅ (认知章,动手并入 Phase 2)
+- [x] Ch7 · Skills 可复用能力包  ✅ 跑通(skill 按需激活+格式固化)
+- [x] Ch8 · 长期记忆与路由  ✅ 跑通(自更新+持久机制验证;模型服从性是另一回事)
 
 ---
 
@@ -107,7 +107,59 @@
 - **下一步:Ch6《异步子 Agent 并行编排》** —— 多 agent 并发接任务,对应产品后台并发处理 + Phase 2。
 - 复习入口:直接说"继续/进 Ch6"即可;ROADMAP.md 是总蓝图,本文件是进度记忆。
 
-### 轮 6 · Ch6 异步子 Agent 并行编排 (待开始)
+### 轮 6 · Ch6 异步子 Agent 并行编排 ✅ (2026-06-23,认知章)
 - 要点:
-- 代码切片:
-- verify:
+  - 同步瓶颈:主agent调task期间被阻塞;长任务"死机"、中途不能追加/取消。
+  - 判定法则:子任务<5s用同步;数分钟以上且需交互用异步。
+  - AsyncSubAgent:name/description/graph_id(需在langgraph.json注册)/url(不填走ASGI进程内,填了走HTTP远程)。
+  - 5个遥控器工具:start/check/update/cancel/list_async_task(自动注入)。task ID=thread ID。
+  - async_tasks state channel:元数据独立存,不随消息压缩丢失(同 Ch4 todos 设计思路)。
+  - 工程:每run占1 worker槽(1主+3子=4槽,--n-jobs-per-worker);起步单部署ASGI,按需拆HTTP。
+  - 坑:别start完立刻check;报进度前先check/list(对话状态永远过时);task_id不截断。
+- 关键纠正:并发 ≠ 必须拆HTTP。并发靠worker槽位数,单体ASGI起步即可;拆HTTP是为资源/团队边界,不是并发本身。
+- 产品映射:异步子agent=后台worker;5工具=任务调度API;async_tasks=任务队列状态;ASGI→HTTP=单体→微服务演进。
+- 动手:延后到 Phase 2(需起 langgraph dev 部署服务,届时随后端一起做)。
+- verify:✅ 口述,Q1(同步异步判定+产品场景)Q2(channel设计同todos)满分;Q3(误以为并发须拆HTTP)已纠正。
+
+### 轮 7 · Ch7 Skills 可复用能力包 ✅ (2026-06-23)
+- 要点:
+  - 能力三角:Skills(按需加载的领域workflow)/Memory(启动加载的持久上下文/AGENTS.md)/Tools(原子操作)。
+  - 决策口诀:所有对话都要→Memory;特定任务专业流程→Skills;原子动作→Tools。
+  - Skill 结构:目录 + SKILL.md(YAML frontmatter:name必须=目录名、description=选用唯一依据;Markdown正文)+ 可选 scripts/references/assets。
+  - 渐进式披露三级:L1 启动只加载name+desc(几百token)/L2 匹配激活才加载正文/L3 引用时LLM自取附件。→ 50个skill也不爆。
+  - skills参数:路径列表,相对backend根,多路径last-wins。存哪取决于backend(Filesystem/State/Store)。
+  - 治理:FilesystemPermission 对 /skills/** deny(只读)或 interrupt(审批);分层shared(只读)+personal(可写)。
+  - 开放标准 agentskills.io,30+工具采纳(含Claude Code自身);跨框架复用,"like npm for agents"。
+- 自我进化(业界做法):① 反思→沉淀Skill/Memory(主流,=Phase6)② 成功案例检索few-shot ③ prompt/skill A/B优化 ④ 轨迹微调(罕见)。关键:人工审批+去重版本化,verifier是瓶颈。
+- 产品映射:agent能力(code-review/testing/检索)做成Skill按角色加载;自我进化=把经验沉淀成Skill写进StoreBackend(namespace分层)+interrupt审批防污染。
+- 代码切片:ch07_skills/skills/task-triage/SKILL.md + agents/skill_agent.py(FilesystemBackend专用root避开.env)。
+- verify:✅ 跑通,agent精准激活skill,严格按"类型/优先级/预估/理由"格式输出(bug/P1/M)。理解题3题全过。
+
+### 轮 8 · Ch8 长期记忆与路由 ✅ (2026-06-23)
+- 要点:
+  - 短期记忆=Checkpointer(单thread内State,thread_id是边界);长期记忆=StoreBackend(跨thread)+memory=参数(启动加载,靠namespace隔离不受thread_id影响)。
+  - 三级namespace:user(个人偏好,隔离)/assistant(agent知识,共享)/org(组织策略,只读)。
+  - memory=参数:列的文件启动时自动注入系统提示;AGENTS.md=agent从反馈学到的改进指令(自我进化载体)。
+  - "路由"=backend路由(按路径前缀选后端),不是任务/检索路由。
+  - **deepagents 无向量检索!** 记忆是路径+namespace结构化隔离。语义检索需自己接 pgvector。
+  - 更新两路径:热路径(对话中edit_file)+ 后台Cron整合agent(定期提炼合并)。
+  - 生产:InMemoryStore(开发)→PostgresStore(生产,store.setup())→LangSmith自动配。并发写冲突:拆文件/追加式/只让后台写共享。
+- 自我进化分工:Skill=固化流程(按需激活);AGENTS.md=固化改进指令/风格(启动always加载)。
+- pgvector补缺(Phase4):写自定义工具 search_knowledge_base(query) 做embedding+相似度检索给agent;Cron提炼的事实embedding后存pgvector。
+- 代码切片:agents/memory_capstone.py —— memory=AGENTS.md + 自更新 + 跨会话持久。
+- verify:✅ 机制全验证(AGENTS.md打印显示新准则被正确追加+持久);但模型未遵守风格约束(会话答案不简洁/没加✅)。
+- 重要教训:"写进记忆"≠"行为会变"。自我进化生效需 强模型 + verifier强制校验 + 关键准则硬编码。再次印证 Ch1"verifier是瓶颈"。
+
+---
+
+## 🎓 Phase 0 完成!(2026-06-23)8/8 章全部跑通
+所有 deepagents 核心机制已学完并各有可运行代码切片:
+- Ch1 Harness定位 / Ch2 建agent+工具 / Ch3 虚拟FS+后端+权限 / Ch4 规划+state
+- Ch5 子agent+隔离 / Ch6 异步编排(认知,动手并Phase2) / Ch7 Skills / Ch8 长期记忆
+代码切片:agents/{first_agent,memory_agent,planning_agent,subagent_demo,skill_agent,memory_capstone}.py + ch07_skills/
+全局基础设施:.env多provider + InMemoryRateLimiter限流 + 搜索节流。
+
+## 📍 下一步:进入 Phase 1 · MVP 闭环
+目标(可测试终止条件):建任务 → agent自动完成 → 看板显示结果,端到端跑通。
+技术栈待搭:FastAPI(后端)+ React+shadcn/ui(前端)+ PostgreSQL+pgvector。
+直接说"开始 Phase 1"即可。ROADMAP.md 是总蓝图。
