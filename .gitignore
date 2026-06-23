@@ -13,3 +13,19 @@ wheels/
 .env
 bak.txt
 *.bak
+
+# 只读参考项目(不纳入本仓库)
+references/
+
+# local db
+*.db
+
+# frontend
+node_modules/
+dist/
+
+# playwright / screenshots
+.playwright-mcp/
+board-*.png
+learning/
+screenshots/

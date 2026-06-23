@@ -1,0 +1,42 @@
+"""产品的 agent 执行器:把一个看板任务交给 deepagents 完成,返回结果文本。
+
+刻意保持干净独立(不 import learning/ 的学习 demo)。
+MVP 阶段 agent 只做"理解任务 → 给出结果文本",不写代码不跑测试(那要沙箱,Phase 2+)。
+"""
+
+import os
+
+from langchain_core.rate_limiters import InMemoryRateLimiter
+from langchain_openai import ChatOpenAI
+
+from deepagents import create_deep_agent
+
+# 客户端限流,避免撞 SiliconFlow 等服务商的 TPM 限额(沿用学习阶段验证过的做法)。
+_rate_limiter = InMemoryRateLimiter(
+    requests_per_second=0.5, check_every_n_seconds=0.1, max_bucket_size=2
+)
+
+
+def _build_model():
+    provider = os.getenv("LLM_PROVIDER", "siliconflow").lower()
+    if provider == "siliconflow":
+        return ChatOpenAI(
+            model=os.getenv("MODEL_NAME", "Qwen/Qwen2.5-7B-Instruct"),
+            api_key=os.environ["SILICONFLOW_API_KEY"],
+            base_url="https://api.siliconflow.cn/v1",
+            rate_limiter=_rate_limiter,
+        )
+    if provider == "openai":
+        return ChatOpenAI(model=os.getenv("MODEL_NAME", "gpt-4.1"), rate_limiter=_rate_limiter)
+    return f"anthropic:{os.getenv('MODEL_NAME', 'claude-sonnet-4-6')}"
+
+
+def run_task(title: str, description: str) -> str:
+    """同步执行一个任务,返回结果文本。供后台任务调用。"""
+    agent = create_deep_agent(
+        model=_build_model(),
+        system_prompt="你是任务执行助手。根据任务标题和描述完成它,给出清晰、可交付的结果。",
+    )
+    prompt = f"任务:{title}\n描述:{description}\n\n请完成这个任务并给出结果。"
+    result = agent.invoke({"messages": [{"role": "user", "content": prompt}]})
+    return result["messages"][-1].content

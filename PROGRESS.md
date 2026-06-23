@@ -3,6 +3,20 @@
 > 每轮循环结束后在这里记:学了什么、写了什么代码、踩了什么坑、还有什么没搞懂。
 > 下一轮开始前先读这里(解决"两次之间失忆")。
 
+## 🔄 新会话恢复指南(给下次开新会话的你/Claude)
+- **现状**:Phase 0(deepagents 8 章全学完)+ Phase 1(MVP 闭环)均已完成。
+- **起服务**:
+  - 后端:`uv run uvicorn app.main:app --app-dir backend --port 8000 --reload`
+  - 前端:`cd frontend && pnpm dev` → 开 http://127.0.0.1:5173
+  - 跑前先 `cp .env.example .env` 填 key(备份在 `learning/bak.txt`,已 gitignore)
+- **代码地图**:
+  - `backend/app/` —— FastAPI:`tasks/`(看板任务领域)+ `agent_runtime/executor.py`(agent 执行器)
+  - `frontend/` —— React+Vite+Tailwind 看板
+  - `learning/` —— 学 deepagents 的过程产物(已 gitignore,本地保留,产品不依赖)
+  - `references/fastapi-best-architecture/` —— FBA 借鉴蓝图(已 gitignore)
+- **下一步 = Phase 2 · 多 agent 异步并发**(对应 Ch6 动手):直接说"开始 Phase 2"。
+- **关键决策备忘**(详见 ROADMAP.md):极简优先 / React+shadcn 自建 / 借鉴 FBA 后端蓝图 / ponytail 防过度设计 / 主键 UUID / 两个权限平面(Casbin业务 vs deepagents文件系统)/ agent 跑代码必须沙箱 / deepagents 无向量检索需自接 pgvector。
+
 ## 进度总览
 - [ ] 准备篇 · AgentSeek CLI(上/下)  —— 可选,视是否用该脚手架而定
 - [x] Ch1 · Agent Harness  ✅ verify 通过
@@ -159,7 +173,30 @@
 代码切片:agents/{first_agent,memory_agent,planning_agent,subagent_demo,skill_agent,memory_capstone}.py + ch07_skills/
 全局基础设施:.env多provider + InMemoryRateLimiter限流 + 搜索节流。
 
-## 📍 下一步:进入 Phase 1 · MVP 闭环
-目标(可测试终止条件):建任务 → agent自动完成 → 看板显示结果,端到端跑通。
-技术栈待搭:FastAPI(后端)+ React+shadcn/ui(前端)+ PostgreSQL+pgvector。
-直接说"开始 Phase 1"即可。ROADMAP.md 是总蓝图。
+## 📍 Phase 1 · MVP 闭环(进行中)
+目标(终止条件):建任务 → agent自动完成 → 看板显示结果,端到端跑通。
+
+### 已完成
+- 学习产物隔离:agents/ → learning/(含 ch07_skills),产品代码全新建。
+- 参考项目:references/fastapi-best-architecture(FBA,已 gitignore)当只读蓝图;Phase3抄RBAC/数据权限(data_scope/data_rule)、Phase5抄审计(opera_log+TraceID)。
+- ponytail 已装(防过度设计护栏,full 模式)。
+- 策略:极简优先;React+shadcn自建+借鉴FBA后端蓝图;不为通用框架过早抽象。
+- **后端骨架(Step1)✅**:backend/app/ {config,database,main} + tasks领域(model/schema/router)。FastAPI+SQLAlchemy+SQLite。三端点 curl 验证通过。
+- **接 agent(Step2)✅**:agent_runtime/executor.py(产品自己的干净执行器,不依赖learning/)+ BackgroundTasks。
+  状态流转 pending→in_progress→done 验证通过,result 正确写回。
+- 技术细节:主键 UUID(stdlib uuid4);后台任务用 FastAPI BackgroundTasks(Celery留后);建表用 create_all(Alembic留后)。均有 # ponytail: 注释标记延后项。
+- 服务启动:`uv run uvicorn app.main:app --app-dir backend --port 8000 --reload`
+
+- **前端看板(Step3)✅**:frontend/ = Vite+React+TS+Tailwind v4(手写脚手架,未跑交互向导)。
+  src/{api.ts, App.tsx}:三列看板(待办/进行中/完成/失败)+ 新建表单 + 2s 轮询。
+  暂未上 shadcn CLI(ponytail:一张表+表单不值得拉 shadcn 机制;Tailwind 基础已就位,以后 shadcn add 即可)。
+- **联调验证(Step4)✅ Phase 1 终止条件达成**:playwright 浏览器端到端——表单发任务→后台agent完成→轮询刷新→卡片落"已完成"带结果。
+- 启动:后端 `uv run uvicorn app.main:app --app-dir backend --port 8000 --reload`;前端 `cd frontend && pnpm dev`。
+- 已知小问题:① Step1 期间(接agent前)建的旧任务卡在 pending,无害;② 浏览器 1 个 console error(疑似 favicon 404,不影响功能,待查)。
+
+## 🎉 Phase 1 · MVP 闭环 完成(2026-06-23)
+人发任务 → 后台 deepagents 自动接单完成 → 看板显示结果,浏览器端到端跑通。
+
+## 📍 下一步:Phase 2 · 多 agent 异步编排
+目标:任务队列 + 并发 worker(多任务同时跑无串扰)+ 任务拆子任务。对应 Ch6 动手(langgraph dev / 异步)。
+也可先做些 Phase1 收尾(UI 美化/shadcn、任务详情、错误重试)。ROADMAP.md 是总蓝图。

@@ -66,6 +66,16 @@
 反思循环:任务完成 → 评审 agent 抽取"教训" → 写成可复用 Skill/记忆存入知识库
 → 路由器按历史成功率选更优 Skill/prompt → (进阶)prompt/skill 版本化 + 成功率 A/B。
 
+## 建产品的策略决策(2026-06-23 定)
+- **极简垂直切片优先**:Phase 1 刻意做到"丑陋但跑通",不碰 RBAC/多租户/雪花ID;企业地基放 Phase 3+。
+  最大风险=花时间搭完美地基却跑不通核心闭环。先证明 agent 真能接活干完。
+- **前端自建 React+shadcn**(配合 Claude/Pencil 设计工具),**不整套用 Vue 脚手架**。
+- **后端借鉴 insistence/RuoYi-Vue3-FastAPI 的蓝图**(数据模型/Casbin/数据权限/审计表设计),但代码自建,不装它本体。
+  RuoYi 自带"数据权限/数据范围"正好对应 操作权限+数据权限两件套,值得抄。
+- **主键用 UUID(或雪花)**,不用自增(泄漏数据量、不利分布式)。早定。
+- **设计 token**:shadcn = CSS变量+Tailwind theme = 主题色单一真源,是 Pencil/Claude design 的接入点。
+- **不为"团队通用框架"过早抽象(YAGNI)**:先把这一个产品做扎实,以后真复用再抽。
+
 ## 参考开源项目
 - makeplane/plane — 开源 Jira(看板 UI + 任务数据模型)
 - casbin/casbin — 操作权限 + 数据权限

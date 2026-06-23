@@ -6,8 +6,11 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "deepagents",
+    "fastapi>=0.138.0",
     "httpx[socks]>=0.28.1",
     "langchain-openai",
     "python-dotenv>=1.2.2",
+    "sqlalchemy>=2.0.51",
     "tavily-python",
+    "uvicorn[standard]>=0.49.0",
 ]
