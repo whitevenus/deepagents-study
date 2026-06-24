@@ -11,8 +11,13 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 @router.post("", response_model=TaskOut)
 def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
-    # Phase 2:只入库为 pending;执行由独立 worker 轮询接单(不再写死在 POST 里)。
-    task = Task(title=payload.title, description=payload.description)
+    # Phase 2:只入库,执行由独立 worker 轮询接单(不再写死在 POST 里)。
+    # decompose=True → 状态 decomposing,worker 会先拆成子任务而非直接执行。
+    task = Task(
+        title=payload.title,
+        description=payload.description,
+        status="decomposing" if payload.decompose else "pending",
+    )
     db.add(task)
     db.commit()
     db.refresh(task)

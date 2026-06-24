@@ -21,7 +21,10 @@ class Task(Base):
     id = Column(String, primary_key=True, default=_uuid)
     title = Column(String, nullable=False)
     description = Column(Text, default="")
-    status = Column(String, default="pending")  # pending | in_progress | done | failed
+    # pending | decomposing | in_progress | done | failed | cancelled
+    status = Column(String, default="pending")
     result = Column(Text, default="")
+    parent_id = Column(String, index=True, nullable=True)  # 子任务指向父任务;顶层任务为 None
+
     created_at = Column(DateTime(timezone=True), default=_now)
     updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now)

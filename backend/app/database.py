@@ -15,3 +15,14 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def ensure_columns():
+    """ponytail: 上 Alembic 前的极简补列——给已存在的旧库补上新加的列(新建库由 create_all 直接带上)。
+    加新列就在这加一行;真要正经迁移历史再换 Alembic。"""
+    from sqlalchemy import inspect, text
+
+    existing = {c["name"] for c in inspect(engine).get_columns("tasks")}
+    with engine.begin() as conn:
+        if "parent_id" not in existing:
+            conn.execute(text("ALTER TABLE tasks ADD COLUMN parent_id VARCHAR"))

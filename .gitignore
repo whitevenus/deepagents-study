@@ -30,3 +30,6 @@ dist/
 board-*.png
 learning/
 screenshots/
+
+# TS 增量构建缓存
+*.tsbuildinfo

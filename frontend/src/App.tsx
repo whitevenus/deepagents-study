@@ -1,32 +1,43 @@
 import { useEffect, useState, type FormEvent } from "react"
-import { createTask, listTasks, type Task } from "./api"
+import { cancelTask, createTask, listTasks, type Task } from "./api"
 
-const COLUMNS: { key: Task["status"]; label: string }[] = [
+// decomposing 归到「进行中」列展示(拆解也是一种处理中)
+const COLUMNS: { key: Task["status"]; label: string; also?: Task["status"][] }[] = [
   { key: "pending", label: "📋 待办" },
-  { key: "in_progress", label: "🔧 进行中" },
+  { key: "in_progress", label: "🔧 进行中", also: ["decomposing"] },
   { key: "done", label: "✅ 已完成" },
   { key: "failed", label: "⚠️ 失败" },
+  { key: "cancelled", label: "🚫 已取消" },
 ]
+
+const CANCELLABLE: Task["status"][] = ["pending", "decomposing", "in_progress"]
 
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
+  const [decompose, setDecompose] = useState(false)
+
+  const refresh = () => listTasks().then(setTasks).catch(() => {})
 
   useEffect(() => {
-    const tick = () => listTasks().then(setTasks).catch(() => {})
-    tick()
-    const id = setInterval(tick, 2000) // 轮询刷新状态(实时推送留后面)
+    refresh()
+    const id = setInterval(refresh, 2000) // 轮询刷新状态(实时推送留后面)
     return () => clearInterval(id)
   }, [])
 
   async function submit(e: FormEvent) {
     e.preventDefault()
     if (!title.trim()) return
-    await createTask(title.trim(), description.trim())
+    await createTask(title.trim(), description.trim(), decompose)
     setTitle("")
     setDescription("")
-    listTasks().then(setTasks)
+    refresh()
+  }
+
+  async function onCancel(id: string) {
+    await cancelTask(id)
+    refresh()
   }
 
   return (
@@ -47,14 +58,19 @@ export default function App() {
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
+        <label className="flex items-center gap-1.5 text-sm text-neutral-600 whitespace-nowrap px-1">
+          <input type="checkbox" checked={decompose} onChange={(e) => setDecompose(e.target.checked)} />
+          先拆解
+        </label>
         <button className="rounded-md bg-neutral-900 text-white px-5 py-2 font-medium hover:bg-neutral-700">
           发布
         </button>
       </form>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         {COLUMNS.map((col) => {
-          const items = tasks.filter((t) => t.status === col.key)
+          const states = [col.key, ...(col.also ?? [])]
+          const items = tasks.filter((t) => states.includes(t.status))
           return (
             <div key={col.key} className="bg-white rounded-lg border border-neutral-200 p-3">
               <div className="font-semibold mb-3 flex justify-between">
@@ -64,7 +80,20 @@ export default function App() {
               <div className="space-y-3">
                 {items.map((t) => (
                   <div key={t.id} className="rounded-md border border-neutral-200 p-3 shadow-sm">
-                    <div className="font-medium">{t.title}</div>
+                    <div className="font-medium flex items-start justify-between gap-2">
+                      <span>
+                        {t.parent_id && <span className="text-neutral-400 mr-1">↳</span>}
+                        {t.title}
+                      </span>
+                      {CANCELLABLE.includes(t.status) && (
+                        <button
+                          onClick={() => onCancel(t.id)}
+                          className="text-xs text-neutral-400 hover:text-red-600 shrink-0"
+                        >
+                          取消
+                        </button>
+                      )}
+                    </div>
                     {t.description && (
                       <div className="text-sm text-neutral-500 mt-1">{t.description}</div>
                     )}

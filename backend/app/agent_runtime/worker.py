@@ -31,23 +31,43 @@ def recover_stale() -> int:
         db.close()
 
 
-def _claim_pending(limit: int) -> list[tuple[str, str, str]]:
-    """取至多 limit 个 pending,标记 in_progress,返回 (id, title, description)。
-    单循环串行 claim,不会重复派发同一任务。"""
+def _claim(limit: int) -> list[tuple[str, str, str, str]]:
+    """取至多 limit 个待办,返回 (id, title, description, kind)。kind=pending|decomposing。
+    pending 标记为 in_progress;decomposing 不改状态(靠 _running 防重复派发,崩溃后能自愈不丢拆解意图)。"""
     db = SessionLocal()
     try:
         rows = (
             db.query(Task)
-            .filter(Task.status == "pending")
+            .filter(Task.status.in_(("pending", "decomposing")))
             .order_by(Task.created_at)
-            .limit(limit)
             .all()
         )
-        claimed = [(t.id, t.title, t.description) for t in rows]
+        claimed = []
         for t in rows:
-            t.status = "in_progress"
+            if t.id in _running:  # decomposing 状态不变,需显式跳过正在跑的
+                continue
+            kind = t.status
+            if kind == "pending":
+                t.status = "in_progress"
+            claimed.append((t.id, t.title, t.description, kind))
+            if len(claimed) >= limit:
+                break
         db.commit()
         return claimed
+    finally:
+        db.close()
+
+
+def _decompose_blocking(task_id: str, title: str, description: str) -> int:
+    """调 LLM 拆任务 → 把子任务作为 pending 子记录入库,返回子任务数。"""
+    subs = executor.decompose(title, description)
+    db = SessionLocal()
+    try:
+        db.add_all(
+            [Task(title=s["title"], description=s["description"], parent_id=task_id) for s in subs]
+        )
+        db.commit()
+        return len(subs)
     finally:
         db.close()
 
@@ -65,16 +85,23 @@ def _finish(task_id: str, status: str, result: str) -> None:
         db.close()
 
 
-async def _run(task_id: str, title: str, description: str) -> None:
+async def _run(task_id: str, title: str, description: str, kind: str) -> None:
     last_err = None
     try:
         for _ in range(MAX_ATTEMPTS):
             try:
-                # to_thread:run_task 是阻塞的 deepagents 调用;wait_for:超时兜底,避免永久卡死
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(executor.run_task, title, description), TASK_TIMEOUT
-                )
-                _finish(task_id, "done", result)
+                # to_thread:阻塞的 LLM 调用;wait_for:超时兜底,避免永久卡死
+                if kind == "decomposing":
+                    n = await asyncio.wait_for(
+                        asyncio.to_thread(_decompose_blocking, task_id, title, description),
+                        TASK_TIMEOUT,
+                    )
+                    _finish(task_id, "done", f"已拆解为 {n} 个子任务")
+                else:
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(executor.run_task, title, description), TASK_TIMEOUT
+                    )
+                    _finish(task_id, "done", result)
                 return
             except Exception as e:  # noqa: BLE001  含 TimeoutError;重试到上限再判失败
                 last_err = e
@@ -88,7 +115,7 @@ async def run_worker(stop_event: asyncio.Event | None = None) -> None:
     while stop_event is None or not stop_event.is_set():
         free = MAX_CONCURRENCY - len(_running)
         if free > 0:
-            for task_id, title, desc in _claim_pending(free):
+            for task_id, title, desc, kind in _claim(free):
                 _running.add(task_id)
-                asyncio.create_task(_run(task_id, title, desc))
+                asyncio.create_task(_run(task_id, title, desc, kind))
         await asyncio.sleep(POLL_INTERVAL)

@@ -112,3 +112,20 @@ def test_cancelled_result_not_overwritten():
     tid = _seed("cancel-me", status="cancelled")
     worker._finish(tid, "done", "should-not-write")
     assert _status(tid) == "cancelled"
+
+
+def test_decompose_creates_children():
+    """decomposing 任务被拆成子任务:父落 done,子任务带 parent_id 入库。"""
+    executor.decompose = lambda title, desc: [
+        {"title": f"sub-{i}", "description": "x"} for i in range(3)
+    ]
+    tid = _seed("big-task", status="decomposing")
+    asyncio.run(_run_until([tid]))
+    assert _status(tid) == "done"
+    db = SessionLocal()
+    try:
+        children = db.query(Task).filter(Task.parent_id == tid).all()
+    finally:
+        db.close()
+    assert len(children) == 3
+    assert {c.parent_id for c in children} == {tid}

@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agent_runtime.worker import run_worker
-from app.database import Base, engine
+from app.database import Base, engine, ensure_columns
 from app.tasks import models  # noqa: F401  注册模型到 Base.metadata
 from app.tasks.router import router as tasks_router
 
@@ -14,6 +14,7 @@ from app.tasks.router import router as tasks_router
 async def lifespan(app: FastAPI):
     # ponytail: MVP 直接建表;有 schema 变更需求时再上 Alembic(参考 references/.../backend/alembic)。
     Base.metadata.create_all(bind=engine)
+    ensure_columns()  # 给旧库补新列(parent_id 等)
     worker = asyncio.create_task(run_worker())  # Phase 2:进程内后台 worker 接单
     yield
     worker.cancel()

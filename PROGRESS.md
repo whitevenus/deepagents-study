@@ -228,3 +228,18 @@
 - **真 LLM 5 并发实测 ✅ (2026-06-24)**:起后端发 5 个「N×N」可验证任务,14s 内全部 done;2s 时 5 个同时 in_progress(真并发派发),结果各对各 N²(无串扰),failed=0(共享限流器排队,不撞 429),卡住=0(超时兜效)。坐实终止条件在真模型下也成立,不只 stub。驱动脚本在 scratchpad(临时,未入库)。
 - **关键认知**:全局共享 `_rate_limiter`(0.5 req/s)把 5 个并发任务的 LLM 请求串行排队 → 这正是"并发但不撞限额"的设计;单次短调用的任务排队也很快。重任务(多轮+搜索)仍可能慢/撞 TPM,届时按需调限流参数或换模型。
 - **下一步**:子任务拆解 task→subtask(Phase2 剩较重一项);或补前端取消 UI(取消按钮 + 已取消状态显示)。
+
+### 轮 10 · 子任务拆解 + 前端取消 UI ✅ (2026-06-24)
+- **子任务拆解(task→subtask,Ch4/Ch5 动手)**:
+  - 设计:拆解发生在**建任务时**(`decompose=true`),不另设端点 —— 避开「worker 抢先把父任务当普通任务跑」的竞态。
+  - 流程:`decompose=true` → 父任务状态 `decomposing` → worker 认领 `decomposing` → 调 `executor.decompose`(结构化输出,直接用模型 `.with_structured_output(_Plan)`,不走 deep agent)→ 子任务作为 pending 子记录入库 → 父落 `done`。子任务复用现成 worker 并发/超时/重试机制跑。
+  - 关键设计:`decomposing` 任务认领时**不改状态**(靠 `_running` 防重复派发),所以进程崩溃后能自愈、不丢拆解意图(对比 pending→in_progress 会被 `recover_stale` 误当普通任务)。
+  - 数据:`Task.parent_id`(子指父,顶层为 None)。`database.ensure_columns()` 极简补列(旧库 ALTER 加 parent_id,新库 create_all 直接带;上 Alembic 前的过渡)。
+- **前端取消 UI**:卡片加「取消」按钮(pending/decomposing/in_progress 可取消)+ 新增「🚫 已取消」列(4→5 列);`decomposing` 归入「进行中」列;子任务标题带 `↳` 前缀;建任务表单加「先拆解」勾选。
+- **代码切片**:executor.decompose + worker(_claim/_run 加 kind 分支 + _decompose_blocking)+ models.parent_id + database.ensure_columns + schemas + router create 分支 + frontend(api.ts/App.tsx)。
+- **verify**:
+  - ✅ `uv run pytest` 6 passed(新增 test_decompose_creates_children:父 done + 3 子带 parent_id)。
+  - ✅ 前端 `pnpm build` 通过(tsc + vite)。
+  - ✅ 真 LLM e2e:取消 pending→cancelled;「做待办 App」decompose=true → 12s 拆出 5 个合理子任务(需求/后端/前端/联调/部署),各自被 worker 接单跑起。
+- **本轮没做(刻意延后)**:① 父任务聚合子任务结果(现在父只显示「已拆解为 N 个」,不汇总子产物 —— 真要 roll-up 再做);② 拆解已存在任务(只支持建时拆);③ 前端父子分组/缩进树(现在子任务靠 ↳ 前缀散在各列,没做层级视图)。
+- **Phase 2 收尾盘点**:解耦 worker ✅ / 5 并发无串扰 ✅(stub + 真 LLM 双验)/ 超时 ✅ / 重试 ✅ / 卡死恢复 ✅ / 取消 ✅ / 拆子任务 ✅ / 测试基建+CI ✅。langgraph dev/HTTP 拆分按 Ch6 结论「单体 ASGI 并发已够」不做。**Phase 2 实质完成**,下一步可进 Phase 3(Casbin 权限)。

@@ -8,6 +8,7 @@ import os
 
 from langchain_core.rate_limiters import InMemoryRateLimiter
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field
 
 from deepagents import create_deep_agent
 
@@ -48,3 +49,32 @@ def run_task(title: str, description: str) -> str:
     prompt = f"任务:{title}\n描述:{description}\n\n请完成这个任务并给出结果。"
     result = agent.invoke({"messages": [{"role": "user", "content": prompt}]})
     return result["messages"][-1].content
+
+
+class _Subtask(BaseModel):
+    title: str = Field(description="子任务标题,简短")
+    description: str = Field(description="子任务的具体说明")
+
+
+class _Plan(BaseModel):
+    subtasks: list[_Subtask] = Field(description="2-5 个可独立执行的子任务")
+
+
+def _structured_model():
+    m = _build_model()
+    if isinstance(m, str):  # anthropic 分支返回的是字符串,转成真模型实例
+        from langchain.chat_models import init_chat_model
+
+        return init_chat_model(m, rate_limiter=_rate_limiter)
+    return m
+
+
+def decompose(title: str, description: str) -> list[dict]:
+    """把一个大任务拆成 2-5 个可独立执行的子任务(结构化输出,直接用模型不走 deep agent)。"""
+    model = _structured_model().with_structured_output(_Plan)
+    prompt = (
+        "把下面的任务拆解成 2-5 个可以独立执行的子任务,每个有清晰的标题和说明。\n"
+        f"任务:{title}\n描述:{description or '(无)'}"
+    )
+    plan = model.invoke(prompt)
+    return [{"title": s.title, "description": s.description} for s in plan.subtasks]
