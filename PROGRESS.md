@@ -225,4 +225,6 @@
   - 规矩:跨模块 fixture → 根 conftest;模块专属 stub/断言 → 该模块 tests/。Phase3 写 `app/auth/tests/test_permissions.py` 时直接复用 conftest。
 - **坑**:FastAPI 0.138 的 `include_router` 用 `_IncludedRouter` mount 包裹,不再把子路由摊进 `app.routes`;验证路由要查 `app.openapi()['paths']` 而非遍历 routes。
 - **本轮没做(刻意延后)**:① 大任务拆子任务 task→subtask(最重,终止条件用不到,下一轮做);② langgraph dev / async_tasks channel 实操(Ch6 延后项,拆 HTTP 才需要,当前单体 ASGI 并发已够);③ 前端「已取消」列 + 取消按钮(cancelled 状态目前不落任何看板列,小事,UI 收尾时补)。
-- **下一步**:跑真 LLM 的 5 并发实测(此前自检用 stub);或做子任务拆解;或补前端取消 UI。
+- **真 LLM 5 并发实测 ✅ (2026-06-24)**:起后端发 5 个「N×N」可验证任务,14s 内全部 done;2s 时 5 个同时 in_progress(真并发派发),结果各对各 N²(无串扰),failed=0(共享限流器排队,不撞 429),卡住=0(超时兜效)。坐实终止条件在真模型下也成立,不只 stub。驱动脚本在 scratchpad(临时,未入库)。
+- **关键认知**:全局共享 `_rate_limiter`(0.5 req/s)把 5 个并发任务的 LLM 请求串行排队 → 这正是"并发但不撞限额"的设计;单次短调用的任务排队也很快。重任务(多轮+搜索)仍可能慢/撞 TPM,届时按需调限流参数或换模型。
+- **下一步**:子任务拆解 task→subtask(Phase2 剩较重一项);或补前端取消 UI(取消按钮 + 已取消状态显示)。
