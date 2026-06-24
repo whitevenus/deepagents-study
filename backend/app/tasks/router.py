@@ -1,8 +1,7 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.agent_runtime.executor import run_task as run_agent_task
-from app.database import SessionLocal, get_db
+from app.database import get_db
 from app.tasks.models import Task
 from app.tasks.schemas import TaskCreate, TaskOut
 
@@ -10,34 +9,13 @@ from app.tasks.schemas import TaskCreate, TaskOut
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
-def _execute(task_id: str):
-    """后台执行:pending → in_progress → done/failed,把结果写回。"""
-    # ponytail: MVP 用 FastAPI BackgroundTasks;并发量大或要可取消时再上 Celery / 异步 worker(Ch6)。
-    db = SessionLocal()
-    try:
-        task = db.get(Task, task_id)
-        if not task:
-            return
-        task.status = "in_progress"
-        db.commit()
-        try:
-            task.result = run_agent_task(task.title, task.description)
-            task.status = "done"
-        except Exception as e:  # noqa: BLE001  失败也要落库,看板才能显示
-            task.result = f"执行失败:{e}"
-            task.status = "failed"
-        db.commit()
-    finally:
-        db.close()
-
-
 @router.post("", response_model=TaskOut)
-def create_task(payload: TaskCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
+    # Phase 2:只入库为 pending;执行由独立 worker 轮询接单(不再写死在 POST 里)。
     task = Task(title=payload.title, description=payload.description)
     db.add(task)
     db.commit()
     db.refresh(task)
-    background_tasks.add_task(_execute, task.id)  # 立即返回 pending,后台跑 agent
     return task
 
 
@@ -51,4 +29,19 @@ def get_task(task_id: str, db: Session = Depends(get_db)):
     task = db.get(Task, task_id)
     if not task:
         raise HTTPException(404, "task not found")
+    return task
+
+
+@router.post("/{task_id}/cancel", response_model=TaskOut)
+def cancel_task(task_id: str, db: Session = Depends(get_db)):
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, "task not found")
+    if task.status in ("done", "failed", "cancelled"):
+        raise HTTPException(409, f"任务已 {task.status},无法取消")
+    # ponytail: 可靠取消的是尚未开始的 pending;in_progress 的真正中断需 Ch6 异步子 agent 的 cancel,
+    # 这里标记为 cancelled,worker 跑完会丢弃结果不覆盖(_finish 里判断)。
+    task.status = "cancelled"
+    db.commit()
+    db.refresh(task)
     return task

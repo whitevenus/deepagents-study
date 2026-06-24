@@ -203,6 +203,26 @@
 ## 🎉 Phase 1 · MVP 闭环 完成(2026-06-23)
 人发任务 → 后台 deepagents 自动接单完成 → 看板显示结果,浏览器端到端跑通。
 
-## 📍 下一步:Phase 2 · 多 agent 异步编排
-目标:任务队列 + 并发 worker(多任务同时跑无串扰)+ 任务拆子任务。对应 Ch6 动手(langgraph dev / 异步)。
-也可先做些 Phase1 收尾(UI 美化/shadcn、任务详情、错误重试)。ROADMAP.md 是总蓝图。
+## 📍 Phase 2 · 多 agent 异步编排 + 健壮执行(进行中)
+目标(终止条件):同发 5 个任务并发完成无串扰。
+
+### 轮 9 · Phase 2 核心:解耦 worker + 并发 + 超时/重试/恢复 ✅ (2026-06-24)
+- **解耦发布/执行**:POST 不再写死 `_execute`,只入库 pending;新增独立 `agent_runtime/worker.py` 轮询接单。
+  - `run_worker(stop_event)`:每 POLL_INTERVAL 扫一次 pending,按空闲槽位 claim 并派发。
+  - 并发靠 `MAX_CONCURRENCY - len(_running)` 空闲槽位限流(默认 5)。ponytail:不上 Celery/Redis,进程内 asyncio 够用。
+  - 阻塞的 deepagents 调用走 `asyncio.to_thread`,不卡事件循环。
+- **超时(修 Phase1 卡死 bug)**:executor 给 ChatOpenAI 加 `timeout`(默认 60s,根因:无 timeout→模型挂起→永久 in_progress);worker 再套 `asyncio.wait_for(TASK_TIMEOUT=180)` 兜底。
+- **重试**:`_run` 内循环 MAX_ATTEMPTS(默认 3)次,到上限才落 failed。无新增 DB 列(在协程内重试,不持久 attempts)。
+- **卡死恢复**:启动时 `recover_stale()` 把残留 in_progress 重置为 pending(进程重启/崩溃不丢任务)。
+- **取消**:`POST /tasks/{id}/cancel`。可靠取消 pending;in_progress 标 cancelled,worker 跑完 `_finish` 判断不覆盖结果。真正中断需 Ch6 异步子agent cancel(延后)。
+- **启动接线**:main.py 改用 lifespan,启动时 `create_task(run_worker())`,关闭时 cancel。
+- **代码切片**:`backend/app/agent_runtime/worker.py`(新)+ executor/main/router 改。
+- **verify**:✅ `uv run pytest` —— 5 个用例:并发无串扰 / 重试落 failed / 超时兜底 / 卡死恢复 / 取消不被覆盖。全程 monkeypatch run_task(无 LLM、不联网)。OpenAPI 4 路由齐(含 cancel)。
+- **测试基建(本轮顺手立的规矩)**:装 pytest(dev 依赖)+ pyproject `[tool.pytest.ini_options]`(testpaths/pythonpath)+ `.github/workflows/ci.yml`(push/PR 自动跑 pytest,因 LLM 被 stub 故无需 secrets)。原则:只测有逻辑的地方(worker 分支/权限矩阵),不测 CRUD 直通;LLM 那层用 eval 而非单测。每个 Phase 终止条件 = 一个测试。
+- **测试布局(照 FBA 就近共置)**:看了 references FBA —— 测试是「包 + 分层 + 就近」,不是单文件。落地:
+  - `backend/conftest.py` —— 跨模块共享基建:临时 sqlite(绝不碰开发库 autoboard.db)+ 建表 + autouse 清表 fixture。新模块直接复用。
+  - `backend/app/tasks/tests/test_worker.py` —— 用例就近放在它测的模块里,镜像源码结构;worker 专属的 stub/helper 留在这。
+  - 规矩:跨模块 fixture → 根 conftest;模块专属 stub/断言 → 该模块 tests/。Phase3 写 `app/auth/tests/test_permissions.py` 时直接复用 conftest。
+- **坑**:FastAPI 0.138 的 `include_router` 用 `_IncludedRouter` mount 包裹,不再把子路由摊进 `app.routes`;验证路由要查 `app.openapi()['paths']` 而非遍历 routes。
+- **本轮没做(刻意延后)**:① 大任务拆子任务 task→subtask(最重,终止条件用不到,下一轮做);② langgraph dev / async_tasks channel 实操(Ch6 延后项,拆 HTTP 才需要,当前单体 ASGI 并发已够);③ 前端「已取消」列 + 取消按钮(cancelled 状态目前不落任何看板列,小事,UI 收尾时补)。
+- **下一步**:跑真 LLM 的 5 并发实测(此前自检用 stub);或做子任务拆解;或补前端取消 UI。

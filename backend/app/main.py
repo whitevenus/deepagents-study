@@ -1,14 +1,25 @@
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.agent_runtime.worker import run_worker
 from app.database import Base, engine
 from app.tasks import models  # noqa: F401  注册模型到 Base.metadata
 from app.tasks.router import router as tasks_router
 
-# ponytail: MVP 直接建表;有 schema 变更需求时再上 Alembic(参考 references/.../backend/alembic)。
-Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="AutoBoard")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ponytail: MVP 直接建表;有 schema 变更需求时再上 Alembic(参考 references/.../backend/alembic)。
+    Base.metadata.create_all(bind=engine)
+    worker = asyncio.create_task(run_worker())  # Phase 2:进程内后台 worker 接单
+    yield
+    worker.cancel()
+
+
+app = FastAPI(title="AutoBoard", lifespan=lifespan)
 
 # MVP 本地开发放开 CORS;生产收紧到具体前端域名。
 app.add_middleware(

@@ -17,6 +17,11 @@ _rate_limiter = InMemoryRateLimiter(
 )
 
 
+# 单次 LLM 请求超时(秒)。Phase 1 的卡死 bug 根因:ChatOpenAI 默认无 timeout,
+# 模型挂起 → 任务永久 in_progress。设得比 worker 的 TASK_TIMEOUT 小,让卡住的线程能自己退出。
+_LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "60"))
+
+
 def _build_model():
     provider = os.getenv("LLM_PROVIDER", "siliconflow").lower()
     if provider == "siliconflow":
@@ -25,9 +30,12 @@ def _build_model():
             api_key=os.environ["SILICONFLOW_API_KEY"],
             base_url="https://api.siliconflow.cn/v1",
             rate_limiter=_rate_limiter,
+            timeout=_LLM_TIMEOUT,
         )
     if provider == "openai":
-        return ChatOpenAI(model=os.getenv("MODEL_NAME", "gpt-4.1"), rate_limiter=_rate_limiter)
+        return ChatOpenAI(
+            model=os.getenv("MODEL_NAME", "gpt-4.1"), rate_limiter=_rate_limiter, timeout=_LLM_TIMEOUT
+        )
     return f"anthropic:{os.getenv('MODEL_NAME', 'claude-sonnet-4-6')}"
 
 
