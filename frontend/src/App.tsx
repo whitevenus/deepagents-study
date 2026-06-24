@@ -98,7 +98,7 @@ export default function App() {
                       <div className="text-sm text-neutral-500 mt-1">{t.description}</div>
                     )}
                     {t.result && (
-                      <div className="text-sm mt-2 bg-neutral-50 rounded p-2 whitespace-pre-wrap">
+                      <div className="text-sm mt-2 bg-neutral-50 rounded p-2 whitespace-pre-wrap max-h-48 overflow-y-auto">
                         {t.result}
                       </div>
                     )}
