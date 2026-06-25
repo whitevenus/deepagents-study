@@ -9,6 +9,7 @@ from app.auth import models as auth_models  # noqa: F401  注册 User 到 Base.m
 from app.auth.router import router as auth_router
 from app.auth.security import hash_password
 from app.database import Base, SessionLocal, engine, ensure_columns
+from app.knowledge.store import init_knowledge
 from app.tasks import models  # noqa: F401  注册模型到 Base.metadata
 from app.tasks.router import router as tasks_router
 
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI):
     # ponytail: MVP 直接建表;有 schema 变更需求时再上 Alembic(参考 references/.../backend/alembic)。
     Base.metadata.create_all(bind=engine)
     ensure_columns()  # 给旧库补新列(parent_id 等)
+    init_knowledge()  # Phase 4:建 pgvector 扩展 + knowledge 表(SQLite 自动跳过)
     seed_demo_users()
     worker = asyncio.create_task(run_worker())  # Phase 2:进程内后台 worker 接单
     yield

@@ -3,8 +3,9 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.config import DATABASE_URL
 
-# check_same_thread=False:SQLite 在 FastAPI 多线程下需要。换 Postgres 时去掉 connect_args。
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+# check_same_thread=False 仅 SQLite 在 FastAPI 多线程下需要;Postgres 不能传这个参数。
+_connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, connect_args=_connect_args)
 SessionLocal = sessionmaker(bind=engine, autoflush=False)
 Base = declarative_base()
 

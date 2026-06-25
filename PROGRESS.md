@@ -6,6 +6,8 @@
 ## 🔄 新会话恢复指南(给下次开新会话的你/Claude)
 - **现状**:Phase 0(deepagents 8 章全学完)+ Phase 1(MVP 闭环)均已完成。
 - **起服务**(推荐 tmux,能切窗口看日志):
+  - **先起数据库**(Phase 4 起用 Postgres+pgvector):`docker compose up -d`(根目录;首次会拉 pgvector/pgvector:pg16 镜像)。停 `docker compose down`,清数据 `down -v`。
+  - 跑前 `cp .env.example .env` 填 key;`.env` 里已带 `DATABASE_URL`(指向本地 PG)+ `EMBED_MODEL/EMBED_DIM`。
   - 一键起两个 tmux 窗口:
     ```
     tmux new-session -d -s autoboard -n backend
@@ -283,7 +285,33 @@
 - **本轮没做(刻意延后)**:① 用户注册/改密/用户管理 UI(种子够用,要管理后台再上)② token 刷新/refresh token(短期 access token 够 demo)③ react-router(见上,第二个已登录页面时上)④ users 表入旧库的 ensure_columns(新表由 create_all 直接建,无需补列)。
 - **下一步**:Phase 4 · 切 Postgres + pgvector → 知识库沉淀。
 
+## 📍 Phase 4 · 知识库沉淀(Postgres + pgvector)进行中
+目标(终止条件):相似任务第二次更快/更准(固定基准)。
+
+### 轮 13 · 切 Postgres+pgvector + 知识库沉淀/检索 ✅ (2026-06-25)
+- **决策**:Docker Compose 起 PG(`docker-compose.yml`,pgvector/pgvector:pg16,扩展预装);embedding 用 **Qwen3-Embedding-4B**(SiliconFlow,实测 **2560 维**——pgvector 建表要固定维度,先 curl 探明再写)。
+- **切库(slice 1)**:`config.DATABASE_URL` 走 .env 指向 PG,默认值留 SQLite 兜底;`database.py` 的 `check_same_thread` 仅 SQLite 才传(PG 不能传)。**测试仍用 SQLite**(conftest 覆盖 DATABASE_URL),快、无外部依赖、CI 无需 PG/secret。验证:app 跑 PG 建表+登录+CRUD 通,37 单测无回归。
+- **知识模块(slice 2,`app/knowledge/`)**:**PG 专属,故用原生 SQL 不走 ORM**——既贴合 pgvector 的 `<=>` 写法,又不让 Vector 列污染走 SQLite 的 `create_all`(测试)。`is_pg()` 守卫:非 PG 时 init/add/search 全 no-op。
+  - `embed.py`:文本→向量,复用 SiliconFlow embedding 接口(deepagents 无向量检索,自接 pgvector,兑现 Ch8 埋的坑)。
+  - `store.py`:`init_knowledge`(建扩展+表)/`add_knowledge`/`search_knowledge`(余弦相似度 top-k)。向量用 pgvector 字面量 `'[...]'` + `CAST(:x AS vector)`,免注册 psycopg 适配器。
+- **检索工具(slice 3)**:`executor.search_knowledge_base(query)` 接进 `run_task` 的 agent,system_prompt 提示「开始前先查知识库复用经验」。
+- **完成即沉淀(slice 4)**:worker `_run` 在任务 done 后 `await to_thread(_remember)` 把「任务+结果」embed 入库;best-effort + is_pg 守卫,失败不拖垮任务,SQLite 测试自动跳过。
+- **verify**:
+  - ✅ `uv run pytest` 37 passed(+2:vec_literal 纯逻辑 / SQLite 下知识库 no-op 不报错)。
+  - ✅ `eval_demo.py`(真 PG+API,固定基准):查询「怎么高效计算 fibonacci,别用慢的递归」→ Top1 命中中文「斐波那契」那条 **0.778**,无关条目仅 0.36/0.33 —— **跨语言语义检索成立 = 更准的地基**。手动跑 `PYTHONPATH=backend uv run python -m app.knowledge.eval_demo`。
+  - ✅ 真 app e2e:发任务 8s done → knowledge 表自动沉淀 1 条(source_task_id 对得上)= 沉淀闭环。
+- **关于终止条件**:沉淀 + 语义检索 + 工具接线 + 完成即入库,**四个环节都在真实 infra 上验过**。「agent 第二次实际更快/更准」是 LLM 行为 eval(依赖模型服从性,= verifier 瓶颈,本项目一贯「LLM 层用 eval 不用单测」),机制已就绪、可手动演示,不设为门禁;它也与 Phase 6 反思循环重叠。
+- **✅ 真 agent 第二次实测(LangSmith trace 坐实终止条件)**:
+  - 原始任务「调研 Qwen3-VL-Embedding-4B 的优缺点及主要内容」:**133.12s / 34.4K tokens**,库里当时没相关知识(检索 4 次命中仅 0.29-0.32 的无关项),只能从头硬写。
+  - 后续相似任务「Qwen3-VL-Embedding-4B 的优缺点是什么?」:`search_knowledge_base` **以 0.81 相似度命中**前一条沉淀,直接复用 → **10.70s / 17.2K tokens**。
+  - **效果 ≈ 12× 提速、token 减半**,终止条件「相似任务第二次更快/更准」在真模型下成立。
+  - trace 拆解:133s 里 **≈132s 是 LLM 4 轮生成**(最慢单轮 82.5s 写长报告),`search_knowledge_base` 4 次共 <1.3s——**慢在模型生成,不在检索;省的也是那几轮生成**。
+- **企业级 RAG 差距(查证后记的 backlog,现在数据量小不急)**:naive RAG(存原文+纯向量+余弦 top-k)跑通机制 OK,生产级普遍还加:① **混合检索**(向量+BM25,RRF 融合,MRR 56.7%→66.4%)② **cross-encoder reranker**(粗召回→精排,+17pp MRR)③ 语义分块 ④ RAGAS 量化评估 ⑤ 提炼/去重/版本化。pgvector 选型本身正确(已用 PG 就别再引第二个向量库)。重的那几层等量大/进 Phase 7 再上。
+- **本轮没做(刻意延后)**:① 反思/提炼 agent(现在直接存「任务+结果」原文,不抽炼教训 → Phase 6)② 知识库去重/版本化 ③ HNSW/IVFFlat 索引(数据量小,顺序扫够;量大再建)④ 知识库前端页(UI 跟后端阶段长,届时一起)⑤ Cron 后台整合(Ch8 的冷路径)。
+- **下一步**:补反思提炼(Phase 6 雏形:done 后让 LLM 抽「教训」再存,而非存原文)或进 Phase 5(审计/可观测,Symphony 笔记有现成 API 形状蓝图)。
+
 ## 🧹 已发现的 UX / 小 bug 待办(不急,后面顺手做)
+- **⚠️ 知识库检索越权(Phase 4 引入,跨用户共享前必须修)**:`knowledge.search_knowledge` 无 owner 过滤——A 完成的任务结果,B 的 agent 检索时能原样捞到,**绕过 Phase 3 的 ABAC 行级数据权限**。修法:knowledge 表加 owner_id(沉淀时带上 task.owner_id)+ 检索按当前用户过滤(或显式标记「共享知识 vs 私有知识」两类)。当前单人 demo 无害,多租户/共享前是硬伤。位置 `backend/app/knowledge/store.py` + worker `_remember`。
 - **任务详情拆分**(产品结构):看板卡片只该放元信息(标题/状态/2 行预览),完整结果挪到详情。现在长结果撑垮「已完成」列(已先加 `max-h-48 overflow-y-auto` 临时止血)。做法:卡片瘦身 + 点开详情 modal(不引路由);**真正多页路由 + 布局壳留到 Phase 3**(登录页 = 第二个目的地时再上 react-router)。原则:有 2+ 真实目的地才加路由。
 - **失败信息为空 bug**:失败卡显示「执行失败(重试 3 次):」冒号后空白 —— `asyncio.TimeoutError` 的 `str()` 是空串,worker `_run` 里 `f"...:{last_err}"` 拼出空。修:为空时补 `type(e).__name__`(并区分超时 vs 其他异常)。位置 `backend/app/agent_runtime/worker.py`。
 - **UI 跟着后端阶段长**:无单独「前端阶段」;Phase3→登录+用户管理页,Phase4→知识库页,Phase5→审计/trace 钻取页,Phase7→整体打磨。

@@ -1,0 +1,23 @@
+# Phase 4:本地 Postgres + pgvector(业务数据 + 知识库向量)。
+# 起:docker compose up -d   停:docker compose down   清数据:docker compose down -v
+# ponytail: 单个 db 容器够用,Redis/对象存储等到真需要再加。
+services:
+  db:
+    image: pgvector/pgvector:pg16 # pgvector 已预装,省去 CREATE EXTENSION 前的编译
+    container_name: autoboard_pg
+    environment:
+      POSTGRES_USER: autoboard
+      POSTGRES_PASSWORD: autoboard
+      POSTGRES_DB: autoboard
+    ports:
+      - "5432:5432"
+    volumes:
+      - autoboard_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autoboard"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  autoboard_pgdata:

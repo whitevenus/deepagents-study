@@ -77,6 +77,18 @@ def _decompose_blocking(task_id: str, title: str, description: str) -> int:
         db.close()
 
 
+def _remember(task_id: str, title: str, result: str) -> None:
+    """把完成的任务结果沉淀进知识库(best-effort)。
+    PG 才有知识库(is_pg 守卫),SQLite 测试自动 no-op;任何失败都不影响任务完成。"""
+    try:
+        from app.knowledge.store import add_knowledge, is_pg
+
+        if is_pg() and result:
+            add_knowledge(f"任务:{title}\n结果:{result}", source_task_id=task_id)
+    except Exception:  # noqa: BLE001  沉淀失败不能拖垮任务
+        pass
+
+
 def _finish(task_id: str, status: str, result: str) -> None:
     db = SessionLocal()
     try:
@@ -107,6 +119,7 @@ async def _run(task_id: str, title: str, description: str, kind: str) -> None:
                         asyncio.to_thread(executor.run_task, title, description), TASK_TIMEOUT
                     )
                     _finish(task_id, "done", result)
+                    await asyncio.to_thread(_remember, task_id, title, result)  # 沉淀进知识库
                 return
             except Exception as e:  # noqa: BLE001  含 TimeoutError;重试到上限再判失败
                 last_err = e

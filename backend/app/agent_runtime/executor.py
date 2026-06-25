@@ -40,11 +40,34 @@ def _build_model():
     return f"anthropic:{os.getenv('MODEL_NAME', 'claude-sonnet-4-6')}"
 
 
+def search_knowledge_base(query: str) -> str:
+    """检索知识库,找与查询最相关的历史任务经验/结论。
+    遇到可能有可复用过往经验的任务时,先用它查一下,别重复劳动。
+
+    Args:
+        query: 用自然语言描述你想查的主题或问题。
+
+    Returns:
+        最相关的若干条历史知识(带相似度);无相关内容时明确告知。
+    """
+    from app.knowledge.store import search_knowledge
+
+    hits = search_knowledge(query, k=3)
+    if not hits:
+        return "知识库暂无相关内容。"
+    return "\n\n".join(f"[相似度 {h['score']:.2f}] {h['content']}" for h in hits)
+
+
 def run_task(title: str, description: str) -> str:
     """同步执行一个任务,返回结果文本。供后台任务调用。"""
     agent = create_deep_agent(
         model=_build_model(),
-        system_prompt="你是任务执行助手。根据任务标题和描述完成它,给出清晰、可交付的结果。",
+        tools=[search_knowledge_base],  # Phase 4:让 agent 能查知识库复用历史经验
+        system_prompt=(
+            "你是任务执行助手。根据任务标题和描述完成它,给出清晰、可交付的结果。"
+            "开始前,如果任务可能有可复用的历史经验,先调用 search_knowledge_base 查一下,"
+            "把检索到的经验融入你的结果。"
+        ),
     )
     prompt = f"任务:{title}\n描述:{description}\n\n请完成这个任务并给出结果。"
     result = agent.invoke({"messages": [{"role": "user", "content": prompt}]})
