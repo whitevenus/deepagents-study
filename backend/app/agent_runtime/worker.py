@@ -77,14 +77,20 @@ def _decompose_blocking(task_id: str, title: str, description: str) -> int:
         db.close()
 
 
-def _remember(task_id: str, title: str, result: str, owner_id: str | None) -> None:
-    """把完成的任务结果沉淀进知识库(best-effort),带 owner 以便按用户隔离检索。
-    PG 才有知识库(is_pg 守卫),SQLite 测试自动 no-op;任何失败都不影响任务完成。"""
+def _remember(
+    task_id: str, title: str, description: str, result: str, owner_id: str | None, status: str
+) -> None:
+    """复盘 + 沉淀(Phase 6):让 reflect 把结果提炼成可复用「教训」再存(替代原文整段,库更精)。
+    best-effort + is_pg 守卫(SQLite 测试自动 no-op,且不会触达 LLM);任何失败都不影响任务完成。"""
     try:
         from app.knowledge.store import add_knowledge, is_pg
 
-        if is_pg() and result:
-            add_knowledge(f"任务:{title}\n结果:{result}", source_task_id=task_id, owner_id=owner_id)
+        if not (is_pg() and result):
+            return
+        refl = executor.reflect(title, description, result, status)
+        add_knowledge(
+            f"任务:{title}\n教训:{refl['lesson']}", source_task_id=task_id, owner_id=owner_id
+        )
     except Exception:  # noqa: BLE001  沉淀失败不能拖垮任务
         pass
 
@@ -120,11 +126,18 @@ async def _run(task_id: str, title: str, description: str, kind: str, owner_id: 
                         TASK_TIMEOUT,
                     )
                     _finish(task_id, "done", result)
-                    await asyncio.to_thread(_remember, task_id, title, result, owner_id)  # 沉淀进知识库
+                    # 复盘提炼教训入库
+                    await asyncio.to_thread(
+                        _remember, task_id, title, description, result, owner_id, "done"
+                    )
                 return
             except Exception as e:  # noqa: BLE001  含 TimeoutError;重试到上限再判失败
                 last_err = e
-        _finish(task_id, "failed", f"执行失败(重试 {MAX_ATTEMPTS} 次):{last_err}")
+        # str(TimeoutError()) 是空串 → 兜底用异常类名,避免显示「执行失败:」后空白
+        fail_msg = f"执行失败(重试 {MAX_ATTEMPTS} 次):{str(last_err) or type(last_err).__name__}"
+        _finish(task_id, "failed", fail_msg)
+        # 失败也复盘:提炼「这类任务为何失败、下次怎么避免」,供相似任务参考
+        await asyncio.to_thread(_remember, task_id, title, description, fail_msg, owner_id, "failed")
     finally:
         _running.discard(task_id)
 

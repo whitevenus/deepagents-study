@@ -111,6 +111,28 @@ def _structured_model():
     return m
 
 
+class _Reflection(BaseModel):
+    adequate: bool = Field(description="结果是否真正、充分地完成了任务(失败信息一律 false)")
+    lesson: str = Field(
+        description="一条 ≤2 句、面向未来、可复用的经验:不达标/失败就说清问题出在哪、下次怎么做;达标就提炼做好这类任务的关键点"
+    )
+
+
+def reflect(title: str, description: str, result: str, status: str = "done") -> dict:
+    """复盘:裁判结果是否达标 + 提炼一条可复用教训(自我进化的核心,Phase 6)。
+    ponytail: 单次 LLM 调用同时出 {达标, 教训};裁判本身是 LLM(不完美 = verifier 瓶颈),
+    更严的多视角投票/人工反馈评判留到企业级阶段。"""
+    model = _structured_model().with_structured_output(_Reflection)
+    prompt = (
+        "你是任务复盘助手。给定任务和它的执行结果(或失败信息),"
+        "判断结果是否充分正确地完成了任务,并提炼一条可复用的经验/教训。\n"
+        f"任务标题:{title}\n任务描述:{description or '(无)'}\n"
+        f"执行状态:{status}\n执行结果:{result}"
+    )
+    r = model.invoke(prompt)
+    return {"adequate": r.adequate, "lesson": r.lesson}
+
+
 def decompose(title: str, description: str) -> list[dict]:
     """把一个大任务拆成 2-5 个可独立执行的子任务(结构化输出,直接用模型不走 deep agent)。"""
     model = _structured_model().with_structured_output(_Plan)
