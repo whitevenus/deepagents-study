@@ -1,5 +1,15 @@
 import { useEffect, useState, type FormEvent } from "react"
-import { USERS, cancelTask, createTask, getUser, listTasks, setUser, type Task } from "./api"
+import {
+  cancelTask,
+  createTask,
+  getMe,
+  getToken,
+  listTasks,
+  logout,
+  type Me,
+  type Task,
+} from "./api"
+import Login from "./Login"
 
 // decomposing 归到「进行中」列展示(拆解也是一种处理中)
 const COLUMNS: { key: Task["status"]; label: string; also?: Task["status"][] }[] = [
@@ -17,23 +27,34 @@ export default function App() {
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
   const [decompose, setDecompose] = useState(false)
-  const [user, setCurrentUser] = useState(getUser())
+  const [me, setMe] = useState<Me | null>(null)
+  const [authed, setAuthed] = useState(!!getToken())
   const [err, setErr] = useState("")
 
-  const refresh = () => listTasks().then(setTasks).catch((e) => setErr(String(e.message)))
+  const refresh = () =>
+    listTasks()
+      .then(setTasks)
+      .catch((e) => {
+        setErr(String(e.message))
+        if (!getToken()) setAuthed(false) // 401 已清 token → 跳回登录
+      })
 
   useEffect(() => {
-    setTasks([])
+    if (!authed) return
+    getMe().then(setMe).catch(() => {})
     refresh()
     const id = setInterval(refresh, 2000) // 轮询刷新状态(实时推送留后面)
     return () => clearInterval(id)
-  }, [user])
+  }, [authed])
 
-  function switchUser(u: string) {
-    setUser(u)
-    setCurrentUser(u)
-    setErr("")
+  function onLogout() {
+    logout()
+    setAuthed(false)
+    setMe(null)
+    setTasks([])
   }
+
+  if (!authed) return <Login onLogin={() => setAuthed(true)} />
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -63,22 +84,19 @@ export default function App() {
     <div className="min-h-screen bg-neutral-50 text-neutral-900 p-6">
       <div className="flex items-center justify-between mb-1">
         <h1 className="text-2xl font-bold">AutoBoard</h1>
-        <label className="text-sm text-neutral-600 flex items-center gap-2">
-          身份
-          <select
-            className="rounded-md border border-neutral-300 px-2 py-1"
-            value={user}
-            onChange={(e) => switchUser(e.target.value)}
-          >
-            {USERS.map((u) => (
-              <option key={u} value={u}>
-                {u}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="text-sm text-neutral-600 flex items-center gap-3">
+          {me && (
+            <span>
+              {me.username}
+              {me.roles.length > 0 && <span className="text-neutral-400"> · {me.roles.join(",")}</span>}
+            </span>
+          )}
+          <button onClick={onLogout} className="text-neutral-400 hover:text-neutral-900">
+            退出
+          </button>
+        </div>
       </div>
-      <p className="text-neutral-500 mb-6">发任务,后台 agent 自动接单完成(alice=管理员 / bob=成员 / carol=只读)</p>
+      <p className="text-neutral-500 mb-6">发任务,后台 agent 自动接单完成</p>
 
       {err && (
         <div className="mb-4 rounded-md bg-red-50 border border-red-200 text-red-700 px-3 py-2 text-sm">

@@ -5,12 +5,15 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "bcrypt>=5.0.0",
     "casbin>=1.43.0",
     "deepagents",
     "fastapi>=0.138.0",
     "httpx[socks]>=0.28.1",
     "langchain-openai",
+    "pyjwt>=2.13.0",
     "python-dotenv>=1.2.2",
+    "python-multipart>=0.0.32",
     "sqlalchemy>=2.0.51",
     "tavily-python",
     "uvicorn[standard]>=0.49.0",

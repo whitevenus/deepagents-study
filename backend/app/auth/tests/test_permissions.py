@@ -10,9 +10,15 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.auth.permissions import can, data_scope
+from app.auth.security import make_token
 from app.database import SessionLocal, get_db
 from app.tasks.models import Task
 from app.tasks.router import router
+
+
+def _auth(username):
+    """带真实 JWT 的请求头(替代旧的 X-User-Id stub)。"""
+    return {"Authorization": f"Bearer {make_token(username)}"}
 
 # 用户:alice=admin, bob=member, carol=viewer(见 policy.csv)
 OTHER = "someone-else"
@@ -84,24 +90,29 @@ def _seed(owner_id, status="pending") -> str:
         db.close()
 
 
-def test_missing_identity_401(client):
+def test_missing_token_401(client):
     assert client.get("/tasks").status_code == 401
 
 
+def test_bad_token_401(client):
+    r = client.get("/tasks", headers={"Authorization": "Bearer not-a-real-jwt"})
+    assert r.status_code == 401
+
+
 def test_viewer_cannot_create_403(client):
-    r = client.post("/tasks", json={"title": "x"}, headers={"X-User-Id": "carol"})
+    r = client.post("/tasks", json={"title": "x"}, headers=_auth("carol"))
     assert r.status_code == 403
 
 
 def test_member_cannot_cancel_others_task_403(client):
     tid = _seed(owner_id="alice")
-    r = client.post(f"/tasks/{tid}/cancel", headers={"X-User-Id": "bob"})
+    r = client.post(f"/tasks/{tid}/cancel", headers=_auth("bob"))
     assert r.status_code == 403
 
 
 def test_member_can_cancel_own_task(client):
     tid = _seed(owner_id="bob")
-    r = client.post(f"/tasks/{tid}/cancel", headers={"X-User-Id": "bob"})
+    r = client.post(f"/tasks/{tid}/cancel", headers=_auth("bob"))
     assert r.status_code == 200
     assert r.json()["status"] == "cancelled"
 
@@ -109,6 +120,6 @@ def test_member_can_cancel_own_task(client):
 def test_member_list_only_sees_own(client):
     _seed(owner_id="alice")
     _seed(owner_id="bob")
-    r = client.get("/tasks", headers={"X-User-Id": "bob"})
+    r = client.get("/tasks", headers=_auth("bob"))
     assert r.status_code == 200
     assert {t["owner_id"] for t in r.json()} == {"bob"}

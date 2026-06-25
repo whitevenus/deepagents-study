@@ -1,15 +1,19 @@
 const BASE = "http://127.0.0.1:8000"
 
-// 身份(stub):谁都能切。真登录留到 Phase 3 UI。后端按 X-User-Id 做权限。
-export const USERS = ["alice", "bob", "carol"] as const // admin / member / viewer
-export function getUser(): string {
-  return localStorage.getItem("user") || "alice"
+// JWT 存 localStorage。所有请求带 Authorization: Bearer。
+export function getToken(): string | null {
+  return localStorage.getItem("token")
 }
-export function setUser(u: string) {
-  localStorage.setItem("user", u)
+function setToken(t: string) {
+  localStorage.setItem("token", t)
 }
-function headers(extra: Record<string, string> = {}) {
-  return { "X-User-Id": getUser(), ...extra }
+export function logout() {
+  localStorage.removeItem("token")
+}
+
+function authHeaders(extra: Record<string, string> = {}) {
+  const t = getToken()
+  return t ? { Authorization: `Bearer ${t}`, ...extra } : extra
 }
 
 export type Task = {
@@ -24,13 +28,31 @@ export type Task = {
   updated_at: string
 }
 
+export type Me = { username: string; roles: string[] }
+
 async function ok(r: Response) {
+  if (r.status === 401) {
+    logout() // token 失效/过期 → 清掉,App 会跳回登录
+    throw new Error("登录已失效")
+  }
   if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.detail || `HTTP ${r.status}`)
   return r.json()
 }
 
+export async function login(username: string, password: string): Promise<void> {
+  // OAuth2 标准登录:表单字段 username/password
+  const body = new URLSearchParams({ username, password })
+  const r = await fetch(`${BASE}/auth/login`, { method: "POST", body })
+  if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.detail || "登录失败")
+  setToken((await r.json()).access_token)
+}
+
+export async function getMe(): Promise<Me> {
+  return ok(await fetch(`${BASE}/auth/me`, { headers: authHeaders() }))
+}
+
 export async function listTasks(): Promise<Task[]> {
-  return ok(await fetch(`${BASE}/tasks`, { headers: headers() }))
+  return ok(await fetch(`${BASE}/tasks`, { headers: authHeaders() }))
 }
 
 export async function createTask(
@@ -41,12 +63,12 @@ export async function createTask(
   return ok(
     await fetch(`${BASE}/tasks`, {
       method: "POST",
-      headers: headers({ "Content-Type": "application/json" }),
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ title, description, decompose }),
     }),
   )
 }
 
 export async function cancelTask(id: string): Promise<Task> {
-  return ok(await fetch(`${BASE}/tasks/${id}/cancel`, { method: "POST", headers: headers() }))
+  return ok(await fetch(`${BASE}/tasks/${id}/cancel`, { method: "POST", headers: authHeaders() }))
 }

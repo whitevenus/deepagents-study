@@ -11,7 +11,11 @@ ponytail: 真正的登录/JWT 留到 Phase 3 UI(登录页 = 第二个真实页�
 import os
 
 import casbin
-from fastapi import Depends, Header, HTTPException
+import jwt
+from fastapi import Depends, HTTPException
+from fastapi.security import OAuth2PasswordBearer
+
+from app.auth.security import read_token
 
 _DIR = os.path.dirname(__file__)
 _enforcer: casbin.Enforcer | None = None
@@ -41,11 +45,25 @@ def data_scope(user: str, obj: str, act: str) -> str | None:
     return None
 
 
-def current_user(x_user_id: str | None = Header(default=None)) -> str:
-    """从请求头取身份。缺身份 → 401(信任边界,默认拒绝)。"""
-    if not x_user_id:
-        raise HTTPException(401, "缺少身份(X-User-Id)")
-    return x_user_id
+def roles_for(user: str) -> list[str]:
+    """该用户拥有的角色(Casbin g 策略)。"""
+    return enforcer().get_roles_for_user(user)
+
+
+# tokenUrl 指向登录端点,让 Swagger 的 Authorize 按钮能直接走登录拿 token。
+_oauth2 = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
+
+
+def current_user(token: str | None = Depends(_oauth2)) -> str:
+    """从 Bearer JWT 解出身份(username)。无 token / 无效 / 过期 → 401。
+    ponytail: 无状态校验,不查 DB 用户是否还在——签名是我们签的,sub 可信;
+    用户若被删,下游 Casbin 查不到角色自然全拒。"""
+    if not token:
+        raise HTTPException(401, "未登录")
+    try:
+        return read_token(token)
+    except jwt.PyJWTError:
+        raise HTTPException(401, "登录已失效,请重新登录")
 
 
 def require(obj: str, act: str):

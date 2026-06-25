@@ -267,6 +267,22 @@
 - **本轮没做(刻意延后)**:① 真登录/JWT/密码(stub 头身份够测授权,登录页 = Phase 3 UI 真页面时上);② users 表 + 权限入库(csv 够 seed,动态权限后台再上 DB adapter);③ user/role 管理 UI;④ agent 文件系统权限平面(另一套,按需做)。
 - **下一步**:Phase 4 · 知识库沉淀(pgvector + 长期记忆),终止条件「相似任务第二次更快/更准」。
 
+### 轮 12 · Phase 3.5 登录(authn:密码 + JWT)✅ (2026-06-25)
+- **为什么单独一轮**:Phase 3 做的是 authz(谁能干什么 = Casbin),身份一直是 `X-User-Id` 头 stub(假底座)。本轮补 authn(你是谁 = 真登录),把 stub 换成真 JWT。
+- **解耦兑现**:只有 `permissions.current_user` 从「读头」换成「校验 Bearer JWT」,**Casbin 那层 + 4 个任务路由一行没动**——authn/authz 解耦的好处实测成立。
+- **设计:角色单一真相**。`users` 表只存认证(username + bcrypt 密码哈希),**不存 role**;角色仍由 `policy.csv` 的 g 策略管,避免「DB 和 csv 两处 role 打架」。要 role 就 `roles_for(user)` 问 Casbin。
+- **栈**:bcrypt(直接用,不套 passlib)+ PyJWT(HS256)+ OAuth2PasswordRequestForm(表单登录,Swagger Authorize 按钮可直接用,装了 python-multipart)。
+- **端点**:`POST /auth/login`(表单 username/password → 校验 → 发 token)、`GET /auth/me`(当前用户 + 角色)。
+- **JWT 无状态**:`current_user` 只验签名+过期取 sub,不查 DB(签名我们签的、sub 可信;用户被删则下游 Casbin 查无角色自然全拒)。密钥 `JWT_SECRET`(config,开发默认/生产 env 注入)。
+- **种子**:启动 `seed_demo_users()` 建 alice/bob/carol,**密码=用户名**(demo,生产删)。
+- **前端**:`Login.tsx` 登录页 + token 存 localStorage + 所有请求带 `Authorization: Bearer` + 401 自动清 token 跳回登录 + 顶栏显示当前用户/角色/退出。**没上 react-router**(ponytail:登录门只是 `token ? Board : Login` 条件渲染,一个已登录页面不值得引路由;等 Phase 4 知识库页 = 第二个已登录页面再上)。
+- **verify**:
+  - ✅ `uv run pytest` 35 passed(+8:密码哈希往返/JWT 往返/篡改拒/登录成功发 token/错密码 401/未知用户 401/me 返回角色;原 5 条越权 e2e 改用真 JWT 仍过)。
+  - ✅ 前端 `pnpm build` 通过。
+  - ✅ 真服务 curl 全链路:alice 登录拿 token / 错密码 401 / `/auth/me`={alice,[admin]} / 无 token 401 / alice token 200 / carol 真登录后 create 403(越权)。
+- **本轮没做(刻意延后)**:① 用户注册/改密/用户管理 UI(种子够用,要管理后台再上)② token 刷新/refresh token(短期 access token 够 demo)③ react-router(见上,第二个已登录页面时上)④ users 表入旧库的 ensure_columns(新表由 create_all 直接建,无需补列)。
+- **下一步**:Phase 4 · 切 Postgres + pgvector → 知识库沉淀。
+
 ## 🧹 已发现的 UX / 小 bug 待办(不急,后面顺手做)
 - **任务详情拆分**(产品结构):看板卡片只该放元信息(标题/状态/2 行预览),完整结果挪到详情。现在长结果撑垮「已完成」列(已先加 `max-h-48 overflow-y-auto` 临时止血)。做法:卡片瘦身 + 点开详情 modal(不引路由);**真正多页路由 + 布局壳留到 Phase 3**(登录页 = 第二个目的地时再上 react-router)。原则:有 2+ 真实目的地才加路由。
 - **失败信息为空 bug**:失败卡显示「执行失败(重试 3 次):」冒号后空白 —— `asyncio.TimeoutError` 的 `str()` 是空串,worker `_run` 里 `f"...:{last_err}"` 拼出空。修:为空时补 `type(e).__name__`(并区分超时 vs 其他异常)。位置 `backend/app/agent_runtime/worker.py`。
