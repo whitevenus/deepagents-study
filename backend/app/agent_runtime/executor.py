@@ -40,34 +40,53 @@ def _build_model():
     return f"anthropic:{os.getenv('MODEL_NAME', 'claude-sonnet-4-6')}"
 
 
-def search_knowledge_base(query: str) -> str:
-    """检索知识库,找与查询最相关的历史任务经验/结论。
-    遇到可能有可复用过往经验的任务时,先用它查一下,别重复劳动。
+def _make_kb_tool(owner_id: str | None):
+    """构造按 owner 隔离的知识库检索工具(闭包捕获 owner_id,只检索该用户的知识,不跨用户泄漏)。"""
 
-    Args:
-        query: 用自然语言描述你想查的主题或问题。
+    def search_knowledge_base(query: str) -> str:
+        """检索知识库,找与查询最相关的历史任务经验/结论。
+        遇到可能有可复用过往经验的任务时,先用它查一下,别重复劳动。
 
-    Returns:
-        最相关的若干条历史知识(带相似度);无相关内容时明确告知。
-    """
+        Args:
+            query: 用自然语言描述你想查的主题或问题。
+
+        Returns:
+            最相关的若干条历史知识(带相似度);无相关内容时明确告知。
+        """
+        from app.knowledge.store import search_knowledge
+
+        hits = search_knowledge(query, k=3, owner_id=owner_id)
+        if not hits:
+            return "知识库暂无相关内容。"
+        return "\n\n".join(f"[相似度 {h['score']:.2f}] {h['content']}" for h in hits)
+
+    return search_knowledge_base
+
+
+# 预检索注入的相似度阈值:只把够相关的历史经验塞进 prompt,避免注入噪声。
+# ponytail: 这是个校准旋钮——eval 里相关 0.78、无关 0.33,0.6 能干净分开;模型/数据变了再调。
+_KB_INJECT_THRESHOLD = float(os.getenv("KB_INJECT_THRESHOLD", "0.6"))
+
+
+def run_task(title: str, description: str, owner_id: str | None = None) -> str:
+    """同步执行一个任务,返回结果文本。供后台任务调用。owner_id 用于知识库按用户隔离检索。"""
     from app.knowledge.store import search_knowledge
 
-    hits = search_knowledge(query, k=3)
-    if not hits:
-        return "知识库暂无相关内容。"
-    return "\n\n".join(f"[相似度 {h['score']:.2f}] {h['content']}" for h in hits)
+    # 预检索注入(retrieve-then-generate):开跑前先查知识库,命中够高的直接进 system prompt。
+    # 把「有没有查知识库」从模型自由裁量变成固定流程——别靠模型自觉(Ch1/Ch8 反复踩过的坑)。
+    hits = search_knowledge(f"{title} {description}", k=3, owner_id=owner_id)
+    context = "\n".join(f"- {h['content']}" for h in hits if h["score"] >= _KB_INJECT_THRESHOLD)
 
+    system_prompt = "你是任务执行助手。根据任务标题和描述完成它,给出清晰、可交付的结果。"
+    if context:
+        system_prompt += "\n\n以下是知识库中可复用的历史经验,请参考并融入你的结果:\n" + context
+    # 保留工具:需要更多/更具体的历史经验时,模型可主动再查(预检索打底 + 工具补查)。
+    system_prompt += "\n\n如需补充更多历史经验,可调用 search_knowledge_base 检索。"
 
-def run_task(title: str, description: str) -> str:
-    """同步执行一个任务,返回结果文本。供后台任务调用。"""
     agent = create_deep_agent(
         model=_build_model(),
-        tools=[search_knowledge_base],  # Phase 4:让 agent 能查知识库复用历史经验
-        system_prompt=(
-            "你是任务执行助手。根据任务标题和描述完成它,给出清晰、可交付的结果。"
-            "开始前,如果任务可能有可复用的历史经验,先调用 search_knowledge_base 查一下,"
-            "把检索到的经验融入你的结果。"
-        ),
+        tools=[_make_kb_tool(owner_id)],
+        system_prompt=system_prompt,
     )
     prompt = f"任务:{title}\n描述:{description}\n\n请完成这个任务并给出结果。"
     result = agent.invoke({"messages": [{"role": "user", "content": prompt}]})

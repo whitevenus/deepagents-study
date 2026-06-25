@@ -33,29 +33,36 @@ def init_knowledge() -> None:
                     content TEXT NOT NULL,
                     embedding vector({EMBED_DIM}) NOT NULL,
                     source_task_id VARCHAR,
+                    owner_id VARCHAR,
                     created_at TIMESTAMPTZ DEFAULT now()
                 )
                 """
             )
         )
+        # 给已存在的旧表补 owner_id(同 tasks 的 ensure_columns 思路;上 Alembic 前的过渡)
+        conn.execute(text("ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS owner_id VARCHAR"))
 
 
-def add_knowledge(content: str, source_task_id: str | None = None) -> None:
+def add_knowledge(content: str, source_task_id: str | None = None, owner_id: str | None = None) -> None:
     if not is_pg():
         return
     vec = vec_literal(embed(content))
     with engine.begin() as conn:
         conn.execute(
             text(
-                "INSERT INTO knowledge (content, embedding, source_task_id) "
-                "VALUES (:c, CAST(:e AS vector), :s)"
+                "INSERT INTO knowledge (content, embedding, source_task_id, owner_id) "
+                "VALUES (:c, CAST(:e AS vector), :s, :o)"
             ),
-            {"c": content, "e": vec, "s": source_task_id},
+            {"c": content, "e": vec, "s": source_task_id, "o": owner_id},
         )
 
 
-def search_knowledge(query: str, k: int = 3) -> list[dict]:
-    """返回最相关的 k 条:[{content, score}],score=余弦相似度(1 - 余弦距离),越大越像。"""
+def search_knowledge(query: str, k: int = 3, owner_id: str | None = None) -> list[dict]:
+    """返回最相关的 k 条:[{content, score}],score=余弦相似度(1 - 余弦距离),越大越像。
+
+    数据权限:按 owner_id 隔离(对齐 Phase 3 的 ABAC「own」)——只检索 owner 一致的知识,
+    避免跨用户泄漏。`IS NOT DISTINCT FROM` 是 NULL 安全等值:owner_id=None 只匹配无主(seed)知识,
+    传具体用户只匹配该用户的知识。"""
     if not is_pg():
         return []
     vec = vec_literal(embed(query))
@@ -63,8 +70,9 @@ def search_knowledge(query: str, k: int = 3) -> list[dict]:
         rows = conn.execute(
             text(
                 "SELECT content, 1 - (embedding <=> CAST(:q AS vector)) AS score "
-                "FROM knowledge ORDER BY embedding <=> CAST(:q AS vector) LIMIT :k"
+                "FROM knowledge WHERE owner_id IS NOT DISTINCT FROM :o "
+                "ORDER BY embedding <=> CAST(:q AS vector) LIMIT :k"
             ),
-            {"q": vec, "k": k},
+            {"q": vec, "k": k, "o": owner_id},
         ).all()
     return [{"content": c, "score": float(s)} for c, s in rows]

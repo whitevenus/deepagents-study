@@ -31,8 +31,8 @@ def recover_stale() -> int:
         db.close()
 
 
-def _claim(limit: int) -> list[tuple[str, str, str, str]]:
-    """取至多 limit 个待办,返回 (id, title, description, kind)。kind=pending|decomposing。
+def _claim(limit: int) -> list[tuple[str, str, str, str, str | None]]:
+    """取至多 limit 个待办,返回 (id, title, description, kind, owner_id)。kind=pending|decomposing。
     pending 标记为 in_progress;decomposing 不改状态(靠 _running 防重复派发,崩溃后能自愈不丢拆解意图)。"""
     db = SessionLocal()
     try:
@@ -49,7 +49,7 @@ def _claim(limit: int) -> list[tuple[str, str, str, str]]:
             kind = t.status
             if kind == "pending":
                 t.status = "in_progress"
-            claimed.append((t.id, t.title, t.description, kind))
+            claimed.append((t.id, t.title, t.description, kind, t.owner_id))
             if len(claimed) >= limit:
                 break
         db.commit()
@@ -77,14 +77,14 @@ def _decompose_blocking(task_id: str, title: str, description: str) -> int:
         db.close()
 
 
-def _remember(task_id: str, title: str, result: str) -> None:
-    """把完成的任务结果沉淀进知识库(best-effort)。
+def _remember(task_id: str, title: str, result: str, owner_id: str | None) -> None:
+    """把完成的任务结果沉淀进知识库(best-effort),带 owner 以便按用户隔离检索。
     PG 才有知识库(is_pg 守卫),SQLite 测试自动 no-op;任何失败都不影响任务完成。"""
     try:
         from app.knowledge.store import add_knowledge, is_pg
 
         if is_pg() and result:
-            add_knowledge(f"任务:{title}\n结果:{result}", source_task_id=task_id)
+            add_knowledge(f"任务:{title}\n结果:{result}", source_task_id=task_id, owner_id=owner_id)
     except Exception:  # noqa: BLE001  沉淀失败不能拖垮任务
         pass
 
@@ -102,7 +102,7 @@ def _finish(task_id: str, status: str, result: str) -> None:
         db.close()
 
 
-async def _run(task_id: str, title: str, description: str, kind: str) -> None:
+async def _run(task_id: str, title: str, description: str, kind: str, owner_id: str | None) -> None:
     last_err = None
     try:
         for _ in range(MAX_ATTEMPTS):
@@ -116,10 +116,11 @@ async def _run(task_id: str, title: str, description: str, kind: str) -> None:
                     _finish(task_id, "done", f"已拆解为 {n} 个子任务")
                 else:
                     result = await asyncio.wait_for(
-                        asyncio.to_thread(executor.run_task, title, description), TASK_TIMEOUT
+                        asyncio.to_thread(executor.run_task, title, description, owner_id),
+                        TASK_TIMEOUT,
                     )
                     _finish(task_id, "done", result)
-                    await asyncio.to_thread(_remember, task_id, title, result)  # 沉淀进知识库
+                    await asyncio.to_thread(_remember, task_id, title, result, owner_id)  # 沉淀进知识库
                 return
             except Exception as e:  # noqa: BLE001  含 TimeoutError;重试到上限再判失败
                 last_err = e
@@ -133,7 +134,7 @@ async def run_worker(stop_event: asyncio.Event | None = None) -> None:
     while stop_event is None or not stop_event.is_set():
         free = MAX_CONCURRENCY - len(_running)
         if free > 0:
-            for task_id, title, desc, kind in _claim(free):
+            for task_id, title, desc, kind, owner_id in _claim(free):
                 _running.add(task_id)
-                asyncio.create_task(_run(task_id, title, desc, kind))
+                asyncio.create_task(_run(task_id, title, desc, kind, owner_id))
         await asyncio.sleep(POLL_INTERVAL)

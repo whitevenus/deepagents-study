@@ -310,8 +310,25 @@
 - **本轮没做(刻意延后)**:① 反思/提炼 agent(现在直接存「任务+结果」原文,不抽炼教训 → Phase 6)② 知识库去重/版本化 ③ HNSW/IVFFlat 索引(数据量小,顺序扫够;量大再建)④ 知识库前端页(UI 跟后端阶段长,届时一起)⑤ Cron 后台整合(Ch8 的冷路径)。
 - **下一步**:补反思提炼(Phase 6 雏形:done 后让 LLM 抽「教训」再存,而非存原文)或进 Phase 5(审计/可观测,Symphony 笔记有现成 API 形状蓝图)。
 
+### 轮 14 · 修知识库检索越权(补严 Phase 3/4 接缝)✅ (2026-06-25)
+- **根因**:检索链 `worker → executor.run_task → search_knowledge_base → search_knowledge` 全程不带「谁在查」,无法按 owner 过滤 → A 的任务结果会被 B 的 agent 检索到,绕过 Phase 3 的 ABAC。
+- **修法**:把 `owner_id` 串下去,知识按 owner 隔离(对齐 ABAC「own」):
+  - `knowledge` 表加 `owner_id`(init_knowledge 建表带上 + `ALTER ... ADD COLUMN IF NOT EXISTS` 补旧表)。
+  - `add_knowledge(..., owner_id)`;`search_knowledge(..., owner_id)` 用 `WHERE owner_id IS NOT DISTINCT FROM :o`(NULL 安全等值:传 None 只匹配无主 seed 知识,传用户只匹配该用户)。
+  - `_remember(task_id, title, result, owner_id)`;`_claim` 多返回 owner_id;`_run` 透传;`executor.run_task(title, description, owner_id)` 把检索工具做成**闭包捕获 owner_id**(只查该用户的知识)。
+- **verify**:✅ pytest 37 passed(worker stub 签名跟着加 owner_id);✅ eval_demo 加了隔离断言——alice 检索不到 bob 的私有知识、bob 只看自己的,越权已堵;检索质量不受影响(Top1 0.777)。
+- **遗留**:跨用户「共享/组织级知识」(owner=NULL 那一档可作共享池)等真有共享需求再设计;当前是「各管各的」。
+
+### 轮 15 · 知识检索升级:预检索注入 + 修措辞(retrieve-then-generate)✅ (2026-06-25)
+- **动机**:原提示词把「查知识库」做成模型可选的工具调用(agentic RAG),违反本项目反复踩的坑——「关键步骤别靠模型自觉」(Ch1/Ch8)。且措辞「如果可能有历史经验就先查」是循环的(查之前无从判断)。
+- **改法(executor.run_task)**:
+  - **预检索注入**:开跑前用 `title+description` 检索,命中相似度 ≥ `KB_INJECT_THRESHOLD`(默认 0.6,校准旋钮)的直接塞进 system_prompt。「有没有查」从模型裁量变成固定流程。
+  - **阈值挡噪声**:0.6 干净分开 eval 里的相关(0.78)与无关(0.33),不再把一堆 0.3 的无关项喂给模型。
+  - **保留工具**:预检索打底 + 模型需要时可再调 `search_knowledge_base` 补查(两者互补,生产常规组合)。
+  - 修措辞:去掉循环条件句。
+- **verify**:✅ pytest 37 passed;✅ 真 e2e 证明注入生效——给 alice 种一条**虚构事实**(ZorbaX 吉祥物 Blinky / 版本 7.7.7),发相似任务,输出准确复现 Blinky、7.7.7(模型不可能自知 → 只能来自注入),**且不依赖模型调工具**。
+
 ## 🧹 已发现的 UX / 小 bug 待办(不急,后面顺手做)
-- **⚠️ 知识库检索越权(Phase 4 引入,跨用户共享前必须修)**:`knowledge.search_knowledge` 无 owner 过滤——A 完成的任务结果,B 的 agent 检索时能原样捞到,**绕过 Phase 3 的 ABAC 行级数据权限**。修法:knowledge 表加 owner_id(沉淀时带上 task.owner_id)+ 检索按当前用户过滤(或显式标记「共享知识 vs 私有知识」两类)。当前单人 demo 无害,多租户/共享前是硬伤。位置 `backend/app/knowledge/store.py` + worker `_remember`。
 - **任务详情拆分**(产品结构):看板卡片只该放元信息(标题/状态/2 行预览),完整结果挪到详情。现在长结果撑垮「已完成」列(已先加 `max-h-48 overflow-y-auto` 临时止血)。做法:卡片瘦身 + 点开详情 modal(不引路由);**真正多页路由 + 布局壳留到 Phase 3**(登录页 = 第二个目的地时再上 react-router)。原则:有 2+ 真实目的地才加路由。
 - **失败信息为空 bug**:失败卡显示「执行失败(重试 3 次):」冒号后空白 —— `asyncio.TimeoutError` 的 `str()` 是空串,worker `_run` 里 `f"...:{last_err}"` 拼出空。修:为空时补 `type(e).__name__`(并区分超时 vs 其他异常)。位置 `backend/app/agent_runtime/worker.py`。
 - **UI 跟着后端阶段长**:无单独「前端阶段」;Phase3→登录+用户管理页,Phase4→知识库页,Phase5→审计/trace 钻取页,Phase7→整体打磨。

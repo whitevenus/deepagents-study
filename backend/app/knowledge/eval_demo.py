@@ -27,17 +27,28 @@ def main() -> None:
     with engine.begin() as conn:  # 清表,保证固定基准可重复
         conn.execute(text("TRUNCATE knowledge"))
     for s in SEED:
-        add_knowledge(s)
+        add_knowledge(s, owner_id="alice")
 
-    hits = search_knowledge(QUERY, k=3)
-    print(f"查询:{QUERY}\n")
+    # ① 检索更准:alice 查自己的知识,语义相似 Top1 命中斐波那契
+    hits = search_knowledge(QUERY, k=3, owner_id="alice")
+    print(f"查询(alice):{QUERY}\n")
     for i, h in enumerate(hits):
         print(f"#{i + 1}  相似度 {h['score']:.3f}  {h['content'][:40]}…")
-
     top = hits[0]
     assert "斐波那契" in top["content"], f"Top1 不是斐波那契那条,而是:{top['content'][:40]}"
     assert top["score"] - hits[-1]["score"] > 0.05, "相关 vs 不相关 区分度不够"
-    print("\n✅ 检索更准:语义相似查询 Top1 命中斐波那契,且明显高于不相关条目。")
+    print("✅ 检索更准:语义相似查询 Top1 命中斐波那契,且明显高于不相关条目。\n")
+
+    # ② 数据权限:bob 存一条同主题知识,alice 检索时绝不能看到(对齐 Phase 3 ABAC)
+    add_knowledge("任务:斐波那契。结果:这是 BOB 的私有结论,不该被别人检索到。", owner_id="bob")
+    alice_hits = search_knowledge(QUERY, k=5, owner_id="alice")
+    assert all("BOB" not in h["content"] for h in alice_hits), "越权!alice 检索到了 bob 的知识"
+    bob_hits = search_knowledge(QUERY, k=5, owner_id="bob")
+    assert bob_hits and "BOB" in bob_hits[0]["content"], "bob 应能检索到自己的知识"
+    assert all("斐波那契" not in h["content"] or "BOB" in h["content"] for h in bob_hits), (
+        "bob 不该看到 alice 的知识"
+    )
+    print("✅ 数据权限隔离:alice 检索不到 bob 的私有知识,bob 只看到自己的——越权已堵。")
 
 
 if __name__ == "__main__":
