@@ -26,3 +26,5 @@ def ensure_columns():
     with engine.begin() as conn:
         if "parent_id" not in existing:
             conn.execute(text("ALTER TABLE tasks ADD COLUMN parent_id VARCHAR"))
+        if "owner_id" not in existing:
+            conn.execute(text("ALTER TABLE tasks ADD COLUMN owner_id VARCHAR"))

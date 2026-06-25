@@ -63,8 +63,13 @@ def _decompose_blocking(task_id: str, title: str, description: str) -> int:
     subs = executor.decompose(title, description)
     db = SessionLocal()
     try:
+        parent = db.get(Task, task_id)
+        owner_id = parent.owner_id if parent else None  # 子任务继承父任务归属人
         db.add_all(
-            [Task(title=s["title"], description=s["description"], parent_id=task_id) for s in subs]
+            [
+                Task(title=s["title"], description=s["description"], parent_id=task_id, owner_id=owner_id)
+                for s in subs
+            ]
         )
         db.commit()
         return len(subs)

@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "casbin>=1.43.0",
     "deepagents",
     "fastapi>=0.138.0",
     "httpx[socks]>=0.28.1",

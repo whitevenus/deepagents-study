@@ -18,5 +18,6 @@ class TaskOut(BaseModel):
     status: str
     result: str
     parent_id: str | None = None
+    owner_id: str | None = None
     created_at: datetime
     updated_at: datetime

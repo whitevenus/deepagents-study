@@ -20,6 +20,7 @@
   - `frontend/` —— React+Vite+Tailwind 看板
   - `learning/` —— 学 deepagents 的过程产物(已 gitignore,本地保留,产品不依赖)
   - `references/fastapi-best-architecture/` —— FBA 借鉴蓝图(已 gitignore)
+  - `references/symphony-notes.md` —— openai/symphony SPEC 一页摘要(运行时形态:状态机/对账/重试/workspace 安全/可观测 API/策略热重载);**Phase 5/6 动手前先读**
 - **下一步 = Phase 2 · 多 agent 异步并发**(对应 Ch6 动手):直接说"开始 Phase 2"。
 - **关键决策备忘**(详见 ROADMAP.md):极简优先 / React+shadcn 自建 / 借鉴 FBA 后端蓝图 / ponytail 防过度设计 / 主键 UUID / 两个权限平面(Casbin业务 vs deepagents文件系统)/ agent 跑代码必须沙箱 / deepagents 无向量检索需自接 pgvector。
 
@@ -243,6 +244,28 @@
   - ✅ 真 LLM e2e:取消 pending→cancelled;「做待办 App」decompose=true → 12s 拆出 5 个合理子任务(需求/后端/前端/联调/部署),各自被 worker 接单跑起。
 - **本轮没做(刻意延后)**:① 父任务聚合子任务结果(现在父只显示「已拆解为 N 个」,不汇总子产物 —— 真要 roll-up 再做);② 拆解已存在任务(只支持建时拆);③ 前端父子分组/缩进树(现在子任务靠 ↳ 前缀散在各列,没做层级视图)。
 - **Phase 2 收尾盘点**:解耦 worker ✅ / 5 并发无串扰 ✅(stub + 真 LLM 双验)/ 超时 ✅ / 重试 ✅ / 卡死恢复 ✅ / 取消 ✅ / 拆子任务 ✅ / 测试基建+CI ✅。langgraph dev/HTTP 拆分按 Ch6 结论「单体 ASGI 并发已够」不做。**Phase 2 实质完成**,下一步可进 Phase 3(Casbin 权限)。
+
+## 📍 Phase 3 · 权限系统(Casbin)完成(2026-06-25)
+目标(终止条件):越权被拒 + 权限矩阵单测通过。✅ 双双达成。
+
+### 轮 11 · Casbin RBAC + ABAC 行级数据权限 ✅ (2026-06-25)
+- **两个权限平面不混**(ROADMAP 关键决策):本轮做的是「业务数据权限」平面(FastAPI/DB 层,管谁能对哪条任务做什么);agent 虚拟文件系统权限是另一套(deepagents namespace + FilesystemPermission),不在此。
+- **一套 Casbin 模型合并 RBAC + ABAC**(`backend/app/auth/model.conf`):
+  - 请求 `r = sub, obj, act, owner`;策略 `p = sub, obj, act, scope`(scope=all 不限拥有者 / own 仅自己的);`g` 做角色继承。
+  - matcher:`g(r.sub,p.sub) && obj && act && (scope==all || r.owner==r.sub)` —— 一行同时表达「角色能不能做这动作」(RBAC)+「能不能碰别人的数据」(ABAC 行级)。
+- **角色矩阵**(`policy.csv`):admin 全通+用户管理 / member 能建、只读/取消自己的 / viewer 只读全部不能写。`g` 行 seed alice=admin、bob=member、carol=viewer。
+  - ponytail:csv 静态策略,生产再换 casbin-sqlalchemy-adapter 入库做动态权限后台。
+- **身份(authz vs authn 解耦)**:用 `X-User-Id` 头当 stub 身份;缺身份 → 401(信任边界默认拒)。
+  - ponytail:真登录/JWT 留到 Phase 3 UI(登录页 = 第二个真实页面时再上 react-router)。本轮先把鉴权(谁能干什么)做扎实,与认证方式无关。
+- **数据范围列表过滤**:`data_scope(user,obj,act)` 探测法返回 all/own/None;list 端点据此过滤(member 只看自己的任务)。单对象(get/cancel)用 `can(user,obj,act,owner=task.owner_id)` 判 403。
+- **数据**:`Task.owner_id`(创建人,行级权限按此判);`ensure_columns()` 给旧库补列;子任务继承父任务 owner_id(worker `_decompose_blocking`)。
+- **代码切片**:`backend/app/auth/{model.conf, policy.csv, permissions.py}` + router 4 端点接 RBAC/ABAC 依赖 + models.owner_id + database.ensure_columns + schemas + 前端身份切换下拉 + 错误横幅。
+- **verify**:
+  - ✅ `uv run pytest` 27 passed:15 条权限矩阵(角色×动作×拥有者)+ data_scope + 5 条端到端越权(裸 app + TestClient:缺身份 401 / viewer 建任务 403 / member 取消他人任务 403 / member 只看到自己的任务)+ 原 6 worker。
+  - ✅ 真服务 curl:无头 401 / carol 建任务 403 / alice 建任务 200;启动 ensure_columns 给开发库补 owner_id 无报错。
+  - ✅ 前端 `pnpm build` 通过;加了身份下拉(alice/bob/carol)+ 403 错误横幅,UI 里可直接看到「越权被拒」。
+- **本轮没做(刻意延后)**:① 真登录/JWT/密码(stub 头身份够测授权,登录页 = Phase 3 UI 真页面时上);② users 表 + 权限入库(csv 够 seed,动态权限后台再上 DB adapter);③ user/role 管理 UI;④ agent 文件系统权限平面(另一套,按需做)。
+- **下一步**:Phase 4 · 知识库沉淀(pgvector + 长期记忆),终止条件「相似任务第二次更快/更准」。
 
 ## 🧹 已发现的 UX / 小 bug 待办(不急,后面顺手做)
 - **任务详情拆分**(产品结构):看板卡片只该放元信息(标题/状态/2 行预览),完整结果挪到详情。现在长结果撑垮「已完成」列(已先加 `max-h-48 overflow-y-auto` 临时止血)。做法:卡片瘦身 + 点开详情 modal(不引路由);**真正多页路由 + 布局壳留到 Phase 3**(登录页 = 第二个目的地时再上 react-router)。原则:有 2+ 真实目的地才加路由。

@@ -1,0 +1,14 @@
+# 操作权限(RBAC)+ 数据范围(ABAC scope)。生产应入库 + casbin-sqlalchemy-adapter 后台管理;
+# ponytail: 学习/MVP 阶段先用 csv 静态策略,要动态改权限再换 DB adapter。
+p, admin,  task, create, all
+p, admin,  task, read,   all
+p, admin,  task, cancel, all
+p, admin,  user, manage, all
+p, member, task, create, all
+p, member, task, read,   own
+p, member, task, cancel, own
+p, viewer, task, read,   all
+
+g, alice, admin
+g, bob,   member
+g, carol, viewer
