@@ -23,9 +23,10 @@ def main() -> None:
     print("好结果裁判:", good)
     print("坏结果裁判:", bad)
     assert good["adequate"] is True, "正确结果应判达标"
+    assert good["reusable"] is False, "常规简单成功不该值得存(存储闸应挡掉)"
     assert bad["adequate"] is False, "漏世纪年规则的代码应判不达标"
-    assert bad["lesson"], "不达标必须给出可复用教训"
-    print("✅ 裁判:正确结果达标、有 bug 的结果不达标并给出纠正教训\n")
+    assert bad["reusable"] is True and bad["lesson"], "不达标应判值得存并给出纠正教训"
+    print("✅ 裁判+存储闸:常规成功不入库,有 bug 的不达标→值得存→给纠正教训\n")
 
     # ② 教训入库 → 相似任务可检索复用
     assert is_pg(), "需连 Postgres(检查 .env DATABASE_URL)"

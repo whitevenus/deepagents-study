@@ -88,9 +88,11 @@ def _remember(
         if not (is_pg() and result):
             return
         refl = executor.reflect(title, description, result, status)
-        add_knowledge(
-            f"任务:{title}\n教训:{refl['lesson']}", source_task_id=task_id, owner_id=owner_id
-        )
+        # 存储闸:只存「值得复用」的教训(失败/不显然洞见),挡掉常规成功的废话教训污染知识库
+        if refl["reusable"] and refl["lesson"].strip():
+            add_knowledge(
+                f"任务:{title}\n教训:{refl['lesson']}", source_task_id=task_id, owner_id=owner_id
+            )
     except Exception:  # noqa: BLE001  沉淀失败不能拖垮任务
         pass
 
