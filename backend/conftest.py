@@ -15,6 +15,7 @@ os.environ["TASK_TIMEOUT"] = "1"
 
 import pytest  # noqa: E402
 
+from app.audit import models as audit_models  # noqa: E402,F401  注册 AuditLog 到 Base.metadata
 from app.auth import models as auth_models  # noqa: E402,F401  注册 User 到 Base.metadata
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.tasks import models  # noqa: E402,F401  注册模型到 Base.metadata

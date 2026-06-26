@@ -1,13 +1,16 @@
 import { useEffect, useState, type FormEvent } from "react"
 import {
+  type AuditEntry,
   cancelTask,
   createTask,
+  getAudit,
   getMe,
   getToken,
   listTasks,
   logout,
   type Me,
   type Task,
+  traceUrl,
 } from "./api"
 import Login from "./Login"
 
@@ -30,6 +33,8 @@ export default function App() {
   const [me, setMe] = useState<Me | null>(null)
   const [authed, setAuthed] = useState(!!getToken())
   const [err, setErr] = useState("")
+  const [auditFor, setAuditFor] = useState<string | null>(null) // 展开审计的任务 id
+  const [audit, setAudit] = useState<AuditEntry[]>([])
 
   const refresh = () =>
     listTasks()
@@ -65,6 +70,19 @@ export default function App() {
       setDescription("")
       setErr("")
       refresh()
+    } catch (e) {
+      setErr(String((e as Error).message))
+    }
+  }
+
+  async function toggleAudit(id: string) {
+    if (auditFor === id) {
+      setAuditFor(null)
+      return
+    }
+    try {
+      setAudit(await getAudit(id))
+      setAuditFor(id)
     } catch (e) {
       setErr(String((e as Error).message))
     }
@@ -159,6 +177,34 @@ export default function App() {
                     {t.result && (
                       <div className="text-sm mt-2 bg-neutral-50 rounded p-2 whitespace-pre-wrap max-h-48 overflow-y-auto">
                         {t.result}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => toggleAudit(t.id)}
+                      className="text-xs text-neutral-400 hover:text-neutral-900 mt-2"
+                    >
+                      {auditFor === t.id ? "收起审计" : "审计"}
+                    </button>
+                    {auditFor === t.id && (
+                      <div className="mt-2 border-t border-neutral-100 pt-2 space-y-1.5">
+                        {audit.map((e, i) => (
+                          <div key={i} className="text-xs text-neutral-600">
+                            <span className="text-neutral-400">
+                              {new Date(e.created_at).toLocaleTimeString()}
+                            </span>{" "}
+                            <span className="font-medium">{e.actor}</span> · {e.action}
+                            {e.trace_id && (
+                              <a
+                                href={traceUrl(e.trace_id)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="ml-1 text-blue-600 hover:underline"
+                              >
+                                ↗ Langfuse
+                              </a>
+                            )}
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>

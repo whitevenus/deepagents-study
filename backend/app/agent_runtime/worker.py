@@ -9,7 +9,9 @@ import asyncio
 import os
 
 from app.agent_runtime import executor  # 通过模块引用,便于测试 monkeypatch run_task
+from app.audit.log import record
 from app.database import SessionLocal
+from app.observability import new_trace_id
 from app.tasks.models import Task
 
 POLL_INTERVAL = float(os.getenv("WORKER_POLL_INTERVAL", "1.0"))  # 秒,扫一次 pending
@@ -53,6 +55,10 @@ def _claim(limit: int) -> list[tuple[str, str, str, str, str | None]]:
             if len(claimed) >= limit:
                 break
         db.commit()
+        # 审计:worker 把 pending 接单 → in_progress(谁=worker,做了什么=认领开跑)
+        for tid, _, _, kind, _ in claimed:
+            if kind == "pending":
+                record(actor="worker", action="in_progress", object_id=tid)
         return claimed
     finally:
         db.close()
@@ -97,7 +103,7 @@ def _remember(
         pass
 
 
-def _finish(task_id: str, status: str, result: str) -> None:
+def _finish(task_id: str, status: str, result: str, trace_id: str | None = None) -> None:
     db = SessionLocal()
     try:
         task = db.get(Task, task_id)
@@ -108,10 +114,14 @@ def _finish(task_id: str, status: str, result: str) -> None:
         db.commit()
     finally:
         db.close()
+    # 审计:谁=agent,做了什么=最终落 done/failed,trace_id 串到 Langfuse 看 agent 怎么干的。
+    # 放在 commit 之后、仅成功路径执行(cancelled/不存在已 return),保证审计反映真实落库结果。
+    record(actor="agent", action=status, object_id=task_id, detail=result, trace_id=trace_id)
 
 
 async def _run(task_id: str, title: str, description: str, kind: str, owner_id: str | None) -> None:
     last_err = None
+    trace_id = new_trace_id()  # None when Langfuse 未配;非 None 时 agent 轨迹进 Langfuse + 写审计
     try:
         for _ in range(MAX_ATTEMPTS):
             try:
@@ -124,10 +134,12 @@ async def _run(task_id: str, title: str, description: str, kind: str, owner_id: 
                     _finish(task_id, "done", f"已拆解为 {n} 个子任务")
                 else:
                     result = await asyncio.wait_for(
-                        asyncio.to_thread(executor.run_task, title, description, owner_id),
+                        asyncio.to_thread(
+                            executor.run_task, title, description, owner_id, trace_id
+                        ),
                         TASK_TIMEOUT,
                     )
-                    _finish(task_id, "done", result)
+                    _finish(task_id, "done", result, trace_id)
                     # 复盘提炼教训入库
                     await asyncio.to_thread(
                         _remember, task_id, title, description, result, owner_id, "done"
@@ -137,7 +149,7 @@ async def _run(task_id: str, title: str, description: str, kind: str, owner_id: 
                 last_err = e
         # str(TimeoutError()) 是空串 → 兜底用异常类名,避免显示「执行失败:」后空白
         fail_msg = f"执行失败(重试 {MAX_ATTEMPTS} 次):{str(last_err) or type(last_err).__name__}"
-        _finish(task_id, "failed", fail_msg)
+        _finish(task_id, "failed", fail_msg, trace_id)
         # 失败也复盘:提炼「这类任务为何失败、下次怎么避免」,供相似任务参考
         await asyncio.to_thread(_remember, task_id, title, description, fail_msg, owner_id, "failed")
     finally:

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.audit.log import record, trail
 from app.auth.permissions import can, current_user, data_scope, require
 from app.database import get_db
 from app.tasks.models import Task
@@ -27,6 +28,7 @@ def create_task(
     db.add(task)
     db.commit()
     db.refresh(task)
+    record(actor=user, action="created", object_id=task.id, detail=task.title)
     return task
 
 
@@ -66,4 +68,26 @@ def cancel_task(task_id: str, db: Session = Depends(get_db), user: str = Depends
     task.status = "cancelled"
     db.commit()
     db.refresh(task)
+    record(actor=user, action="cancelled", object_id=task.id)
     return task
+
+
+@router.get("/{task_id}/audit")
+def task_audit(task_id: str, db: Session = Depends(get_db), user: str = Depends(current_user)):
+    """完整审计轨迹:谁/哪个 agent/做了什么/何时(Phase 5 终止条件)。
+    权限复用任务读权限——能看这条任务才能看它的审计。trace_id 供前端跳 Langfuse 看「为什么」。"""
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, "task not found")
+    if not can(user, "task", "read", owner=task.owner_id):
+        raise HTTPException(403, "无权限:read task")
+    return [
+        {
+            "actor": e.actor,
+            "action": e.action,
+            "detail": e.detail,
+            "trace_id": e.trace_id,
+            "created_at": e.created_at,
+        }
+        for e in trail(task_id)
+    ]

@@ -347,6 +347,34 @@
 - **本轮没做(刻意延后)**:① 同任务自我重跑闭环(critic 不达标→自动带教训重跑同一任务,更贴字面,但要改 worker 重试逻辑)② 多视角投票裁判 ③ 教训去重/合并(同类教训会越积越多)④ 路由器按历史成功率选 prompt/skill(ROADMAP 的进阶项)。
 - **下一步**:Phase 5(审计/可观测,**用 Langfuse 自托管,禁 LangSmith** —— 见 ROADMAP + 记忆);或先补 Phase 6 的同任务自重跑闭环。
 
+## 📍 Phase 5 · 审计 + 可观测(两层设计)完成(2026-06-25)
+目标(终止条件):任一任务可完整追溯 谁/哪个 agent/做了什么/何时。✅ 端到端达成。
+
+### 轮 17 · 业务审计(Postgres)+ Langfuse 自托管 + trace_id 串联 ✅ (2026-06-25)
+- **两层设计**(ROADMAP):① 业务审计 = 自建 append-only 表答「谁/做了什么/何时」;② 可观测 = Langfuse 自托管记 agent 每步推理/工具调用答「为什么」;③ 用 trace_id 把两层串起来(审计「做了什么」一键跳 Langfuse 看「为什么」)。
+- **埋点位置决策(用户定):接缝直写,不用 deepagents middleware**。理由:agent 内部工具调用/推理正是 Langfuse 要抓的(可观测层);业务数据变更全发生在 router/worker 的 DB 写入处,直接在接缝记一笔更简单、不耦合框架内部、且不与 Langfuse 抓的东西重复。
+- **业务审计层(`app/audit/`,纯 ORM 故 SQLite/PG 通用、能进单测)**:
+  - `models.AuditLog`:append-only(只写不改不删)。actor(谁:用户名/worker/agent)+ action(created/in_progress/done/failed/cancelled)+ object_type/object_id + detail(预览,截 2000)+ trace_id(串 Langfuse)+ created_at。
+  - `log.record(...)`:自开独立 session(不耦合请求事务,worker 里也能直接调)+ best-effort(审计失败绝不拖垮主流程);`log.trail(object_id)`:按时间正序取整条时间线。
+  - 接缝:router `create_task`→created、`cancel_task`→cancelled;worker `_claim`(pending→in_progress)→in_progress(actor=worker)、`_finish`(成功路径,cancelled/不存在已 return)→done/failed(actor=agent,带 trace_id)。
+  - 端点 `GET /tasks/{id}/audit`:复用任务读权限(能看任务才能看它的审计),返回有序轨迹给前端。
+- **可观测层(`app/observability.py`,env-gated + best-effort)**:没配 `LANGFUSE_PUBLIC_KEY/SECRET_KEY` → 全程 no-op(测试/CI 不受影响,同 is_pg 守卫思路)。
+  - `new_trace_id()`:worker 开跑前生成(SDK `create_trace_id()`);`trace_config(trace_id)`:`CallbackHandler(trace_context={"trace_id": tid})` 把这次 agent 执行绑定到这个 id,再塞进 `agent.invoke(config=...)`。同一个 id 既进 Langfuse 建 trace,又写进 audit_log → 串联成立。
+  - **坑(SDK 版本)**:装的是 langfuse **4.11.0**(配 v3 服务端)。v4 的 langchain CallbackHandler **不再读 metadata 里的 `langfuse_trace_id`**(那是 v2/v3 写法),要用 `CallbackHandler(trace_context={"trace_id": ...})` 绑定;一开始用 metadata 写法 → trace 落在 SDK 自动生成的 id 下、按我们的 id GET 404,改对后命中。
+- **Langfuse 自托管(用户定:现在就起全栈跑通)**:vendored 官方 v3 自托管,6 容器(langfuse-web/worker + 自带 postgres + clickhouse + redis + minio)。
+  - **合并进主 `docker-compose.yml`(应用户偏好,从单独的 docker-compose.langfuse.yml 收编)**:Langfuse 各服务挂 `profiles: ["observability"]`,默认 `docker compose up -d` 只起业务库 db(不被 6 个重容器拖累),`docker compose --profile observability up -d` 才连 Langfuse 一起起。一个文件、一套命令。
+  - 对 upstream 做 3 处本地化(均标 `# LOCAL:`):① langfuse-postgres 去掉 host 端口映射(5432 已被业务库 autoboard_pg 占,Langfuse 自带库走 compose 内网即可)② `DATABASE_URL` 写死字面量(否则被根 .env 的业务 DATABASE_URL 串进来、还带非法的 +psycopg 前缀)③ langfuse-web 注入 `LANGFUSE_INIT_*`:首次启动自动建 org/project/登录用户 + 一对固定 API key(`pk-lf-autoboard-local`/`sk-lf-autoboard-local`,与后端 .env 对齐,免手动复制)。
+  - 起:`docker compose --profile observability up -d`;UI http://localhost:3000(admin@autoboard.local / autoboard123)。
+  - **为什么 6 个容器(v3 架构,砍不掉)**:postgres 存元数据、clickhouse 存 trace 明细(OLAP)、redis 做摄取队列(BullMQ,故 trace 异步、需等几秒+flush)、minio 存原始 event(S3)。唯一可省的是 Langfuse 自带 postgres(可共用业务库 PG + 单开个库),但要手动建库(现有数据卷跳过 initdb 脚本)+ 耦合迁移,不划算 → 各用各的 PG。退回 v2(单 PG 超轻量)要连 SDK 一起降级,不做。
+- **前端审计钻取**:任务卡片加「审计」按钮 → 拉 `/tasks/{id}/audit` → 内联时间线(时间·actor·action);带 trace_id 的事件给「↗ Langfuse」链接,直跳 `http://localhost:3000/project/autoboard/traces/{trace_id}`。兑现 ROADMAP「UI 一键跳 Langfuse 看为什么」。
+- **verify**:
+  - ✅ `uv run pytest` 41 passed(+4:worker 接单→done 写出有序审计 `[(worker,in_progress),(agent,done)]` / `_finish` 对 cancelled 不补写假审计 / API create→cancel 可追溯且按时间正序 / member 读他人任务审计 403)。Langfuse 可观测层是 env-gated 外部依赖,同惯例用真实 e2e 验、不进单测。
+  - ✅ **全栈真 LLM e2e**(本轮亲测,非 stub):起 Langfuse 6 容器(/api/public/health 200,v3.197.1)+ INIT key 校验通过;alice 登录→建「3×4=?」任务→6s done(result=12)→`GET /audit` 三条有序 `created(alice)/in_progress(worker)/done(agent,trace_id=9c7e...)`→拿 done 的 trace_id GET Langfuse `/api/public/traces/{id}` **命中**(name=ChatOpenAI,input/output/5 observations)= 「做了什么 → 为什么」整条链路打通。
+  - ✅ 前端 `pnpm build` 通过。
+- **顺手:时区集中化(借鉴 FBA 但只取一点)**:新增 `app/clock.py` 的 `now()`(tz-aware UTC),替换 tasks/auth/audit model + security.py 共 4 处散落的 `datetime.now(timezone.utc)`。**保持 UTC 存储**(业界推荐、多区正确,前端 `toLocaleString` 已自动本地化);**不抄** FBA 的「存 Asia/Shanghai」(多区正确性变差)和自定义 `TimeZone` 列类型(那是为 MySQL/返回 naive 的驱动准备,PG 的 timestamptz 经 psycopg 本就 tz-aware,用不上)。41 单测无回归。
+- **本轮没做(刻意延后)**:① OpenTelemetry 接入(用 Langfuse 原生 langchain callback 已够,OTel 通用层等真要对接别的后端再上)② audit_log 索引/分区(append-only 量大再说)③ 审计覆盖 decompose 的子任务创建事件(目前父任务的 done 已记「拆解为 N 个」,子任务各自有自己的 created/in_progress/done)④ 审计前端做成独立钻取页(现在内联卡片够用,UI 整体打磨留 Phase 7)⑤ Langfuse 生产化(强密钥/HTTPS/资源限额,留 Phase 7)。
+- **下一步**:Phase 6 已基本完成(反思提炼,轮 16),可补其「同任务自重跑闭环」;或进 Phase 7 生产化。
+
 ## 🧹 已发现的 UX / 小 bug 待办(不急,后面顺手做)
 - **【企业级阶段必做】人工反馈评判**:Phase 6 的裁判现在是 LLM 自评(不完美)。产品形态里必须能让人对 agent 结果打分/纠正(human-in-the-loop),作为比 LLM 自评更可信的失败信号 + 训练/进化依据。等真做企业级时落地(可结合 Phase 5 的审计/反馈 UI)。
 - **任务详情拆分**(产品结构):看板卡片只该放元信息(标题/状态/2 行预览),完整结果挪到详情。现在长结果撑垮「已完成」列(已先加 `max-h-48 overflow-y-auto` 临时止血)。做法:卡片瘦身 + 点开详情 modal(不引路由);**真正多页路由 + 布局壳留到 Phase 3**(登录页 = 第二个目的地时再上 react-router)。原则:有 2+ 真实目的地才加路由。

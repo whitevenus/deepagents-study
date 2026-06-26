@@ -11,6 +11,7 @@ dependencies = [
     "fastapi>=0.138.0",
     "httpx[socks]>=0.28.1",
     "langchain-openai",
+    "langfuse>=4.11.0",
     "pgvector>=0.4.2",
     "psycopg[binary]>=3.3.4",
     "pyjwt>=2.13.0",

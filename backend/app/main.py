@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agent_runtime.worker import run_worker
+from app.audit import models as audit_models  # noqa: F401  注册 AuditLog 到 Base.metadata
 from app.auth import models as auth_models  # noqa: F401  注册 User 到 Base.metadata
 from app.auth.router import router as auth_router
 from app.auth.security import hash_password

@@ -14,7 +14,7 @@ from app.database import SessionLocal
 from app.tasks.models import Task
 
 
-def _stub(title, description, owner_id=None):
+def _stub(title, description, owner_id=None, trace_id=None):
     """模拟 agent:慢任务(测并发),结果带 title(测无串扰),特殊 title 触发异常/卡死。"""
     if title == "BOOM":
         raise RuntimeError("模型炸了")

@@ -51,7 +51,7 @@
   - 已知待修样本:DB 里 in_progress 的"调研langchian"(模型请求挂起,无超时);pending 的"调研deepagents"(无 worker 接单)。
 - **Phase 3 · 权限系统(Casbin)** —— ✅ 越权被拒,权限矩阵单测通过
 - **Phase 4 · 知识库沉淀(pgvector + 长期记忆)** —— ✅ 相似任务第二次更快/更准(固定基准)
-- **Phase 5 · 审计日志(两层设计)** —— ✅ 任一任务可完整追溯 谁/哪个agent/做了什么/何时
+- **Phase 5 · 审计日志(两层设计)** —— ✅ 任一任务可完整追溯 谁/哪个agent/做了什么/何时(轮 17)
   - 第一层 可观测性:Langfuse(开源自托管,优于 LangSmith 云版——数据不出境)记 agent 每步推理/工具调用,经 LangChain callback / OpenTelemetry 接入。
   - 第二层 业务审计:自建 Postgres audit_log 表(append-only 不可篡改),记 谁/哪个agent/动作/对象/前后值/时间/trace_id。
   - 打通:audit_log 每条存 trace_id → UI 里从"做了什么"一键跳到 Langfuse 看"为什么"。

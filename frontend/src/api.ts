@@ -72,3 +72,21 @@ export async function createTask(
 export async function cancelTask(id: string): Promise<Task> {
   return ok(await fetch(`${BASE}/tasks/${id}/cancel`, { method: "POST", headers: authHeaders() }))
 }
+
+// Phase 5 审计:谁/哪个 agent/做了什么/何时;trace_id 跳 Langfuse 看「为什么」。
+export type AuditEntry = {
+  actor: string
+  action: string
+  detail: string
+  trace_id: string | null
+  created_at: string
+}
+
+export async function getAudit(id: string): Promise<AuditEntry[]> {
+  return ok(await fetch(`${BASE}/tasks/${id}/audit`, { headers: authHeaders() }))
+}
+
+// ponytail: 本地 Langfuse 自托管 + 固定 project id(见 docker-compose.langfuse.yml 的 INIT);
+// 真要多环境再做成配置。
+export const traceUrl = (traceId: string) =>
+  `http://localhost:3000/project/autoboard/traces/${traceId}`

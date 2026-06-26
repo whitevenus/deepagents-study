@@ -1,11 +1,12 @@
 """认证(authn)原语:密码哈希 + JWT 签发/校验。
 与授权(authz, permissions.py 的 Casbin)解耦——这里只回答「你是谁」,不管「你能干什么」。"""
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import bcrypt
 import jwt
 
+from app.clock import now
 from app.config import JWT_EXPIRE_HOURS, JWT_SECRET
 
 _ALG = "HS256"
@@ -22,7 +23,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 def make_token(username: str) -> str:
     payload = {
         "sub": username,
-        "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS),
+        "exp": now() + timedelta(hours=JWT_EXPIRE_HOURS),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=_ALG)
 

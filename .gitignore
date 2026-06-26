@@ -33,3 +33,6 @@ screenshots/
 
 # TS 增量构建缓存
 *.tsbuildinfo
+
+# 本地文档(只本地查阅,不进仓库)
+docs/

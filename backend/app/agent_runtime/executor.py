@@ -68,9 +68,13 @@ def _make_kb_tool(owner_id: str | None):
 _KB_INJECT_THRESHOLD = float(os.getenv("KB_INJECT_THRESHOLD", "0.6"))
 
 
-def run_task(title: str, description: str, owner_id: str | None = None) -> str:
-    """同步执行一个任务,返回结果文本。供后台任务调用。owner_id 用于知识库按用户隔离检索。"""
+def run_task(
+    title: str, description: str, owner_id: str | None = None, trace_id: str | None = None
+) -> str:
+    """同步执行一个任务,返回结果文本。供后台任务调用。owner_id 用于知识库按用户隔离检索;
+    trace_id 用于把这次执行的 agent 轨迹送进 Langfuse(可观测层,与审计串联)。"""
     from app.knowledge.store import search_knowledge
+    from app.observability import trace_config
 
     # 预检索注入(retrieve-then-generate):开跑前先查知识库,命中够高的直接进 system prompt。
     # 把「有没有查知识库」从模型自由裁量变成固定流程——别靠模型自觉(Ch1/Ch8 反复踩过的坑)。
@@ -89,7 +93,10 @@ def run_task(title: str, description: str, owner_id: str | None = None) -> str:
         system_prompt=system_prompt,
     )
     prompt = f"任务:{title}\n描述:{description}\n\n请完成这个任务并给出结果。"
-    result = agent.invoke({"messages": [{"role": "user", "content": prompt}]})
+    result = agent.invoke(
+        {"messages": [{"role": "user", "content": prompt}]},
+        config=trace_config(trace_id, owner_id),
+    )
     return result["messages"][-1].content
 
 
